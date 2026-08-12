@@ -1,0 +1,370 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Retail Inventory System - Serverless REST API (3 Tablas Unificadas + Tabla Global de Catálogos PK/SK)
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Runtime: provided.al2023
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        ENTITIES_TABLE: !Ref EntitiesTable
+        PRODUCTS_TABLE: !Ref ProductsTable
+        ORDERS_TABLE: !Ref OrdersTable
+        CATALOGS_TABLE: !Ref CatalogsTable
+
+Resources:
+  # --- TABLAS DYNAMODB ---
+
+  # 1. TABLA GLOBAL DE CATÁLOGOS (Single-Table Design PK/SK)
+  CatalogsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-catalogs"
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  # 2. ENTIDADES (Clientes y Proveedores)
+  EntitiesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-entities"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # 3. PRODUCTOS E INVENTARIO
+  ProductsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-products"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # 4. PEDIDOS (Ventas a Clientes y Compras a Proveedores)
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-orders"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # --- API GATEWAY REST ---
+  RetailApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  # --- MICROSERVICIOS LAMBDA POR DOMINIO ---
+
+  # 0. DOMINIO DE CATÁLOGOS GLOBALES (PK/SK)
+  ListCatalogsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: catalogs/list/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref CatalogsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /catalogs
+            Method: GET
+
+  CreateCatalogFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: catalogs/create/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CatalogsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /catalogs
+            Method: POST
+
+  # 1. DOMINIO DE ENTIDADES (CLIENTES Y PROVEEDORES)
+  ListEntitiesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: entities/list/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref EntitiesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /entities
+            Method: GET
+
+  GetEntityFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: entities/get/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref EntitiesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /entities/{id}
+            Method: GET
+
+  CreateEntityFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: entities/create/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EntitiesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /entities
+            Method: POST
+
+  GetEntityHistoryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: entities/history/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /entities/{id}/orders
+            Method: GET
+
+  # 2. DOMINIO DE PRODUCTOS E INVENTARIO
+  ListProductsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: products/list/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ProductsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /products
+            Method: GET
+
+  GetProductFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: products/get/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ProductsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /products/{id}
+            Method: GET
+
+  SearchProductsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: products/search/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ProductsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /products/search
+            Method: GET
+
+  CreateProductFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: products/create/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProductsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /products
+            Method: POST
+
+  DeleteProductFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: products/delete/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProductsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /products/{id}
+            Method: DELETE
+
+  # 3. DOMINIO DE PEDIDOS (VENTAS Y COMPRAS UNIFICADAS)
+  ListOrdersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: orders/list/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /orders
+            Method: GET
+
+  GetOrderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: orders/get/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /orders/{id}
+            Method: GET
+
+  SearchOrdersFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: orders/search/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /orders/search
+            Method: GET
+
+  CreateOrderFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: orders/create/
+      Handler: bootstrap
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProductsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RetailApi
+            Path: /orders
+            Method: POST
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${RetailApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
