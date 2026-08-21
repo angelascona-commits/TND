@@ -1,0 +1,21 @@
+# AWS SAM build directory
+.aws-sam/
+
+# Go and OS binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+bootstrap
+
+# Environment & local config
+.env
+samconfig.toml.bak
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo

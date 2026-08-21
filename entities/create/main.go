@@ -6,7 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
+	"regexp"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -14,11 +15,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/google/uuid"
 )
 
 var dynamoClient *dynamodb.Client
 var tableName string
+var digitsRegex = regexp.MustCompile(`^\d+$`)
 
 func init() {
 	cfg, err := config.LoadDefaultConfig(context.TODO())
@@ -26,17 +27,24 @@ func init() {
 		log.Fatalf("Error al cargar la configuración de AWS SDK: %v", err)
 	}
 	dynamoClient = dynamodb.NewFromConfig(cfg)
-	tableName = os.Getenv("ENTITIES_TABLE")
+	tableName = os.Getenv("MAIN_TABLE")
+	if tableName == "" {
+		tableName = os.Getenv("ENTITIES_TABLE")
+	}
 }
 
-type Entity struct {
-	ID        string `json:"id,omitempty" dynamodbav:"id"`
-	Type      string `json:"type" dynamodbav:"type"`
-	Name      string `json:"name" dynamodbav:"name"`
-	Email     string `json:"email,omitempty" dynamodbav:"email,omitempty"`
-	Phone     string `json:"phone,omitempty" dynamodbav:"phone,omitempty"`
-	CreatedAt string `json:"createdAt,omitempty" dynamodbav:"createdAt"`
-	UpdatedAt string `json:"updatedAt,omitempty" dynamodbav:"updatedAt"`
+type EntityProfile struct {
+	PK        string `json:"pk,omitempty" dynamodbav:"PK"`
+	SK        string `json:"sk,omitempty" dynamodbav:"SK"`
+	GSI2_PK   string `json:"gsi2Pk,omitempty" dynamodbav:"GSI2_PK,omitempty"`
+	GSI2_SK   string `json:"gsi2Sk,omitempty" dynamodbav:"GSI2_SK,omitempty"`
+	DniRuc    string `json:"dniRuc" dynamodbav:"dniRuc"`
+	Nombre    string `json:"nombre" dynamodbav:"nombre"`
+	Correo    string `json:"correo,omitempty" dynamodbav:"correo,omitempty"`
+	Direccion string `json:"direccion,omitempty" dynamodbav:"direccion,omitempty"`
+	Telefono  string `json:"telefono,omitempty" dynamodbav:"telefono,omitempty"`
+	Zona      string `json:"zona,omitempty" dynamodbav:"zona,omitempty"`
+	Rol       string `json:"rol" dynamodbav:"rol"`
 }
 
 func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyResponse, error) {
@@ -64,7 +72,6 @@ func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyRespo
 	}, nil
 }
 
-// handler maneja POST /entities
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Petición recibida en CreateEntity: %s", req.HTTPMethod)
 
@@ -72,23 +79,51 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 		return jsonResponse(http.StatusOK, map[string]string{"status": "ok"})
 	}
 
-	var entity Entity
+	var entity EntityProfile
 	if err := json.Unmarshal([]byte(req.Body), &entity); err != nil {
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "Formato JSON de entrada inválido"})
 	}
 
-	if entity.Name == "" {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El campo 'name' es obligatorio"})
+	rawDniRuc := strings.TrimSpace(entity.DniRuc)
+	if rawDniRuc == "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El campo 'dniRuc' es obligatorio"})
 	}
 
-	if entity.Type != "CUSTOMER" && entity.Type != "SUPPLIER" {
-		entity.Type = "CUSTOMER"
+	cleanID := strings.TrimPrefix(strings.ToUpper(rawDniRuc), "USER#")
+
+	if !digitsRegex.MatchString(cleanID) || (len(cleanID) != 8 && len(cleanID) != 11) {
+		return jsonResponse(http.StatusBadRequest, map[string]string{
+			"error": "Identificador de documento inválido. El DNI debe ser numérico de 8 dígitos y el RUC numérico de 11 dígitos.",
+		})
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	entity.ID = uuid.New().String()
-	entity.CreatedAt = now
-	entity.UpdatedAt = now
+	nombre := strings.TrimSpace(entity.Nombre)
+	if nombre == "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El campo 'nombre' es obligatorio"})
+	}
+
+	rol := strings.TrimSpace(entity.Rol)
+	if strings.EqualFold(rol, "Proveedor") || strings.EqualFold(rol, "SUPPLIER") {
+		rol = "Proveedor"
+	} else {
+		rol = "Cliente"
+	}
+
+	cleanZona := strings.ToUpper(strings.TrimSpace(entity.Zona))
+
+	entity.PK = "USER#" + cleanID
+	entity.SK = "PROFILE"
+	entity.DniRuc = cleanID
+	entity.Nombre = nombre
+	entity.Rol = rol
+	entity.Zona = strings.TrimSpace(entity.Zona)
+
+	entity.GSI2_PK = "ROL#" + rol
+	if cleanZona != "" {
+		entity.GSI2_SK = "ZONE#" + cleanZona + "#USER#" + cleanID
+	} else {
+		entity.GSI2_SK = "USER#" + cleanID
+	}
 
 	av, err := attributevalue.MarshalMap(entity)
 	if err != nil {

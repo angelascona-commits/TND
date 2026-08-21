@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistema de Inventario - Panel de Control</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- NAVEGACION POR PESTAÑAS -->
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="tab-catalogs">Catalogos</button>
+    <button class="tab-btn" data-tab="tab-entities">Clientes y Proveedores</button>
+    <button class="tab-btn" data-tab="tab-products">Productos</button>
+    <button class="tab-btn" data-tab="tab-orders">Transacciones</button>
+  </nav>
+
+  <!-- ================================================================== -->
+  <!-- TAB 1: CATALOGOS                                                    -->
+  <!-- GET  /catalogs?categories=...                                       -->
+  <!-- POST /catalogs  {category, itemId, label, sortOrder, isActive}      -->
+  <!-- PATCH /catalogs {category, itemId, label, sortOrder, isActive}      -->
+  <!-- DELETE /catalogs {category, itemId}                                 -->
+  <!-- ================================================================== -->
+  <section id="tab-catalogs" class="tab-content active">
+    <h2>Catalogos</h2>
+
+    <div class="filter-row">
+      <label>Tipo:
+        <select id="cat-type-select">
+          <option value="">-- Seleccione --</option>
+          <option value="CATEGORIAS">Categorias</option>
+          <option value="MARCAS">Marcas</option>
+          <option value="ZONAS">Zonas</option>
+          <option value="CATEGORIAS,MARCAS,ZONAS">Todos</option>
+        </select>
+      </label>
+      <button class="btn" id="btn-search-catalogs">Buscar</button>
+      <button class="btn btn-success" id="btn-show-create-catalog">Nuevo</button>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr><th>Tipo</th><th>Codigo</th><th>Nombre</th><th>Orden</th><th>Activo</th><th>Acciones</th></tr>
+      </thead>
+      <tbody id="catalogs-tbody"></tbody>
+    </table>
+
+    <!-- Modal crear/editar catalogo -->
+    <div id="modal-catalog" class="modal hidden">
+      <div class="modal-box">
+        <h3 id="modal-catalog-title">Nuevo Catalogo</h3>
+        <form id="form-catalog">
+          <label>Tipo:
+            <select id="fc-category" required>
+              <option value="">-- Seleccione --</option>
+              <option value="CATEGORIAS">Categorias</option>
+              <option value="MARCAS">Marcas</option>
+              <option value="ZONAS">Zonas</option>
+            </select>
+          </label>
+          <label>Codigo: <input type="text" id="fc-itemId" required></label>
+          <label>Nombre: <input type="text" id="fc-label" required></label>
+          <label>Orden: <input type="number" id="fc-sortOrder" value="1"></label>
+          <label>Activo: <input type="checkbox" id="fc-isActive" checked></label>
+          <input type="hidden" id="fc-mode" value="create">
+          <div class="modal-actions">
+            <button type="submit" class="btn">Guardar</button>
+            <button type="button" class="btn btn-secondary" onclick="closeModal('modal-catalog')">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- TAB 2: CLIENTES Y PROVEEDORES                                      -->
+  <!-- GET    /entities?rol=...&zona=...                                   -->
+  <!-- GET    /entities/{id}                                               -->
+  <!-- POST   /entities {dniRuc, nombre, correo, direccion, telefono, zona, rol} -->
+  <!-- PATCH  /entities {dniRuc, nombre, correo, direccion, telefono, zona, rol} -->
+  <!-- DELETE /entities/{id}                                               -->
+  <!-- ================================================================== -->
+  <section id="tab-entities" class="tab-content hidden">
+    <h2>Clientes y Proveedores</h2>
+
+    <div class="filter-row">
+      <label>Tipo:
+        <select id="ent-rol-select">
+          <option value="">-- Seleccione --</option>
+          <option value="Cliente">Cliente</option>
+          <option value="Proveedor">Proveedor</option>
+        </select>
+      </label>
+      <label>Zona:
+        <select id="ent-zona-select">
+          <option value="">-- Todas --</option>
+        </select>
+      </label>
+      <button class="btn" id="btn-search-entities">Buscar por Tipo</button>
+    </div>
+
+    <div class="filter-row">
+      <label>Buscar por Documento (DNI/RUC):
+        <input type="text" id="ent-doc-input" placeholder="Ej: 12345678">
+      </label>
+      <button class="btn" id="btn-search-entity-doc">Buscar</button>
+      <button class="btn btn-success" id="btn-show-create-entity">Nuevo</button>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr><th>Documento</th><th>Nombre</th><th>Tipo</th><th>Zona</th><th>Correo</th><th>Telefono</th><th>Acciones</th></tr>
+      </thead>
+      <tbody id="entities-tbody"></tbody>
+    </table>
+
+    <!-- Modal crear/editar entidad -->
+    <div id="modal-entity" class="modal hidden">
+      <div class="modal-box">
+        <h3 id="modal-entity-title">Nuevo Cliente / Proveedor</h3>
+        <form id="form-entity">
+          <label>Documento (DNI 8 digitos / RUC 11 digitos): <input type="text" id="fe-dniRuc" required></label>
+          <label>Nombre: <input type="text" id="fe-nombre" required></label>
+          <label>Tipo:
+            <select id="fe-rol" required>
+              <option value="Cliente">Cliente</option>
+              <option value="Proveedor">Proveedor</option>
+            </select>
+          </label>
+          <label>Zona:
+            <select id="fe-zona">
+              <option value="">-- Sin zona --</option>
+            </select>
+          </label>
+          <label>Correo: <input type="email" id="fe-correo"></label>
+          <label>Telefono: <input type="text" id="fe-telefono"></label>
+          <label>Direccion: <input type="text" id="fe-direccion"></label>
+          <input type="hidden" id="fe-mode" value="create">
+          <div class="modal-actions">
+            <button type="submit" class="btn">Guardar</button>
+            <button type="button" class="btn btn-secondary" onclick="closeModal('modal-entity')">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- TAB 3: PRODUCTOS                                                    -->
+  <!-- GET    /products?cat=...&brand=...                                  -->
+  <!-- GET    /products/{id}       (detalle base + variantes + seriales)    -->
+  <!-- GET    /products/{id}/skus                                          -->
+  <!-- GET    /products/{id}/serials                                       -->
+  <!-- POST   /products {nombre, descripcion, categoryId, brandId, estado} -->
+  <!-- PATCH  /products {productId, nombre, ...}                           -->
+  <!-- DELETE /products/{id}                                               -->
+  <!-- POST   /products/{id}/skus  {variantId, ...}                        -->
+  <!-- POST   /products/{id}/serials {numeroSerie, estadoFisico, ...}      -->
+  <!-- ================================================================== -->
+  <section id="tab-products" class="tab-content hidden">
+    <h2>Productos</h2>
+
+    <div class="filter-row">
+      <label>Categoria:
+        <select id="prod-cat-select">
+          <option value="">-- Todas --</option>
+        </select>
+      </label>
+      <label>Marca:
+        <select id="prod-brand-select">
+          <option value="">-- Todas --</option>
+        </select>
+      </label>
+      <button class="btn" id="btn-search-products">Buscar</button>
+      <button class="btn btn-success" id="btn-show-create-product">Nuevo Producto</button>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr><th>ID</th><th>Nombre</th><th>Categoria</th><th>Marca</th><th>Estado</th><th>Acciones</th></tr>
+      </thead>
+      <tbody id="products-tbody"></tbody>
+    </table>
+
+    <!-- Panel detalle de producto -->
+    <div id="product-detail-panel" class="detail-panel hidden">
+      <h3>Detalle del Producto: <span id="pd-title"></span></h3>
+      <div id="pd-info"></div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin:16px 0 8px;">
+        <h4 style="margin:0;">Variantes (SKU)</h4>
+        <button class="btn btn-success btn-sm" id="btn-show-create-sku">+ Agregar SKU</button>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>SKU</th><th>Color</th><th>RAM</th><th>Precio</th><th>Stock</th></tr></thead>
+        <tbody id="pd-skus-tbody"></tbody>
+      </table>
+
+      <h4>Unidades Fisicas (Series)</h4>
+      <table class="data-table">
+        <thead><tr><th>Numero de Serie</th><th>Estado</th><th>SKU Asociado</th></tr></thead>
+        <tbody id="pd-serials-tbody"></tbody>
+      </table>
+
+      <button class="btn btn-secondary" id="btn-close-product-detail">Cerrar Detalle</button>
+    </div>
+
+    <!-- Modal crear producto base -->
+    <div id="modal-product" class="modal hidden">
+      <div class="modal-box">
+        <h3>Nuevo Producto</h3>
+        <form id="form-product">
+          <label>Nombre: <input type="text" id="fp-nombre" required></label>
+          <label>Descripcion: <input type="text" id="fp-descripcion"></label>
+          <label>Categoria:
+            <select id="fp-categoryId" required>
+              <option value="">-- Seleccione --</option>
+            </select>
+          </label>
+          <label>Marca:
+            <select id="fp-brandId" required>
+              <option value="">-- Seleccione --</option>
+            </select>
+          </label>
+          <label>Estado:
+            <select id="fp-estado">
+              <option value="ACTIVO">Activo</option>
+              <option value="INACTIVO">Inactivo</option>
+            </select>
+          </label>
+          <div class="modal-actions">
+            <button type="submit" class="btn">Guardar</button>
+            <button type="button" class="btn btn-secondary" onclick="closeModal('modal-product')">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal crear SKU / Variante -->
+    <div id="modal-sku" class="modal hidden">
+      <div class="modal-box">
+        <h3>Nuevo SKU / Variante</h3>
+        <form id="form-sku">
+          <input type="hidden" id="fsku-productId">
+          <label>Producto: <input type="text" id="fsku-productName" readonly style="background:#f1f5f9;"></label>
+          <label>Color: <input type="text" id="fsku-color" placeholder="Ej: Violeta Titanio" required></label>
+          <label>RAM / Especificacion: <input type="text" id="fsku-ram" placeholder="Ej: 12GB / 256GB" required></label>
+          <label>Precio (S/): <input type="number" id="fsku-precio" step="0.01" placeholder="0.00" required></label>
+          <label>Stock Inicial: <input type="number" id="fsku-stockTotal" value="0" min="0"></label>
+          <div class="modal-actions">
+            <button type="submit" class="btn btn-success">Guardar SKU</button>
+            <button type="button" class="btn btn-secondary" onclick="closeModal('modal-sku')">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <!-- TAB 4: TRANSACCIONES (COMPRAS Y VENTAS)                             -->
+  <!-- GET  /orders?user=...                                               -->
+  <!-- GET  /orders/{id}                                                   -->
+  <!-- GET  /orders/search?sn=...                                          -->
+  <!-- POST /orders {userDniRuc, tipoOperacion, estadoPago, items:[...]}   -->
+  <!-- ================================================================== -->
+  <section id="tab-orders" class="tab-content hidden">
+    <h2>Transacciones</h2>
+
+    <div class="filter-row">
+      <label>Tipo:
+        <select id="ord-filter-type">
+          <option value="">Todas</option>
+          <option value="Venta">Ventas</option>
+          <option value="Compra">Compras</option>
+        </select>
+      </label>
+      <label>Desde:
+        <input type="date" id="ord-from-date">
+      </label>
+      <label>Hasta:
+        <input type="date" id="ord-to-date">
+      </label>
+      <label>Documento (DNI/RUC):
+        <input type="text" id="ord-user-input" placeholder="Opcional">
+      </label>
+      <button class="btn" id="btn-search-orders">Filtrar Transacciones</button>
+      <button class="btn btn-success" id="btn-show-create-order">Nueva Transaccion</button>
+    </div>
+
+    <div class="filter-row">
+      <label>Buscar por Numero de Serie:
+        <input type="text" id="ord-sn-input" placeholder="Ej: SN-SAM-001">
+      </label>
+      <button class="btn" id="btn-search-order-sn">Rastrear</button>
+    </div>
+
+    <table class="data-table">
+      <thead>
+        <tr><th>ID Transaccion</th><th>Tipo</th><th>Cliente/Proveedor</th><th>Total</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr>
+      </thead>
+      <tbody id="orders-tbody"></tbody>
+    </table>
+
+    <!-- Panel detalle de orden -->
+    <div id="order-detail-panel" class="detail-panel hidden">
+      <h3>Detalle de la Transaccion: <span id="od-title"></span></h3>
+      <div id="od-info"></div>
+      <h4>Items</h4>
+      <table class="data-table">
+        <thead><tr><th>Producto</th><th>SKU</th><th>Serie</th><th>Cantidad</th><th>Precio Unit.</th><th>Subtotal</th></tr></thead>
+        <tbody id="od-items-tbody"></tbody>
+      </table>
+      <button class="btn btn-secondary" id="btn-close-order-detail">Cerrar Detalle</button>
+    </div>
+
+    <!-- Panel resultados rastreo por serie -->
+    <div id="sn-trace-panel" class="detail-panel hidden">
+      <h3>Rastreo de Serie: <span id="sn-trace-title"></span></h3>
+      <div id="sn-trace-results"></div>
+      <button class="btn btn-secondary" id="btn-close-sn-trace">Cerrar</button>
+    </div>
+
+    <!-- Modal crear transaccion -->
+    <div id="modal-order" class="modal hidden">
+      <div class="modal-box" style="width:600px;">
+        <h3>Nueva Transaccion</h3>
+        <form id="form-order">
+          <div style="display:flex; gap:12px;">
+            <label style="flex:2;">Documento Cliente/Proveedor:
+              <input type="text" id="fo-userDniRuc" placeholder="DNI o RUC" required>
+            </label>
+            <label style="flex:1;">Tipo de Operacion:
+              <select id="fo-tipoOperacion" required>
+                <option value="Venta">Venta</option>
+                <option value="Compra">Compra</option>
+              </select>
+            </label>
+          </div>
+
+          <div style="display:flex; gap:12px; margin-top:8px;">
+            <label style="flex:1;">Estado de Pago:
+              <select id="fo-estadoPago">
+                <option value="COMPLETADO">Completado</option>
+                <option value="PENDIENTE">Pendiente</option>
+                <option value="ANULADO">Anulado</option>
+              </select>
+            </label>
+          </div>
+
+          <hr style="margin:16px 0 12px; border-color:#e2e8f0;">
+          <h4 style="margin-bottom:8px;">Items</h4>
+
+          <div id="fo-items-container">
+            <!-- Filas dinámicas de items -->
+          </div>
+
+          <datalist id="sku-datalist">
+            <option value="S24-NEGRO-256GB">Samsung Galaxy S24 Negro 256GB (S/ 4599)</option>
+            <option value="S24-GRIS-512GB">Samsung Galaxy S24 Gris 512GB (S/ 5299)</option>
+            <option value="MBP16-GRAY-512GB">MacBook Pro 16 M3 Space Gray (S/ 12999)</option>
+            <option value="MBP16-SILVER-1TB">MacBook Pro 16 M3 Silver 1TB (S/ 15999)</option>
+            <option value="MON-DELL-27-4K">Monitor Dell 27 4K (S/ 1650)</option>
+            <option value="KEY-LOGI-MX">Teclado Logitech MX Keys (S/ 320)</option>
+          </datalist>
+
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-add-order-item" style="margin-top:6px; margin-bottom:14px;">+ Agregar Item</button>
+
+          <div class="modal-actions">
+            <button type="submit" class="btn btn-success" style="flex:1;">Registrar Transaccion</button>
+            <button type="button" class="btn btn-secondary" onclick="closeModal('modal-order')">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- Toast de notificaciones -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

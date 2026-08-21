@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/google/uuid"
 )
 
 var dynamoClient *dynamodb.Client
@@ -27,20 +28,21 @@ func init() {
 	dynamoClient = dynamodb.NewFromConfig(cfg)
 	tableName = os.Getenv("MAIN_TABLE")
 	if tableName == "" {
-		tableName = os.Getenv("CATALOGS_TABLE")
+		tableName = os.Getenv("PRODUCTS_TABLE")
 	}
 }
 
-type CatalogItem struct {
-	PK        string                 `json:"pk,omitempty" dynamodbav:"PK"`
-	SK        string                 `json:"sk,omitempty" dynamodbav:"SK"`
-	Category  string                 `json:"category" dynamodbav:"category,omitempty"`
-	ItemID    string                 `json:"itemId,omitempty" dynamodbav:"itemId,omitempty"`
-	Label     string                 `json:"label" dynamodbav:"label"`
-	IsActive  bool                   `json:"isActive" dynamodbav:"isActive"`
-	SortOrder int                    `json:"sortOrder" dynamodbav:"sortOrder"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty" dynamodbav:"metadata,omitempty"`
-	ParentID  string                 `json:"parentId,omitempty" dynamodbav:"parentId,omitempty"`
+type ProductBaseItem struct {
+	PK          string `json:"pk,omitempty" dynamodbav:"PK"`
+	SK          string `json:"sk,omitempty" dynamodbav:"SK"`
+	GSI2_PK     string `json:"gsi2Pk,omitempty" dynamodbav:"GSI2_PK,omitempty"`
+	GSI2_SK     string `json:"gsi2Sk,omitempty" dynamodbav:"GSI2_SK,omitempty"`
+	ProductID   string `json:"productId" dynamodbav:"productId"`
+	Nombre      string `json:"nombre" dynamodbav:"nombre"`
+	Descripcion string `json:"descripcion,omitempty" dynamodbav:"descripcion,omitempty"`
+	Estado      string `json:"estado" dynamodbav:"estado"`
+	CategoryID  string `json:"categoryId" dynamodbav:"categoryId"`
+	BrandID     string `json:"brandId" dynamodbav:"brandId"`
 }
 
 func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyResponse, error) {
@@ -69,47 +71,58 @@ func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyRespo
 }
 
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	log.Printf("Petición recibida en CreateCatalog: %s", req.HTTPMethod)
+	log.Printf("Petición recibida en CreateProduct (Base): %s", req.HTTPMethod)
 
 	if req.HTTPMethod == http.MethodOptions {
 		return jsonResponse(http.StatusOK, map[string]string{"status": "ok"})
 	}
 
-	var item CatalogItem
+	var item ProductBaseItem
 	if err := json.Unmarshal([]byte(req.Body), &item); err != nil {
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "Formato JSON de entrada inválido"})
 	}
 
-	category := strings.TrimSpace(item.Category)
-	if category == "" {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El campo 'category' es obligatorio (ej: CATEGORIAS, MARCAS)"})
+	nombre := strings.TrimSpace(item.Nombre)
+	if nombre == "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El campo 'nombre' es obligatorio"})
 	}
 
-	label := strings.TrimSpace(item.Label)
-	if label == "" {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El campo 'label' es obligatorio"})
+	catID := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(item.CategoryID)), "CAT#")
+	if catID == "" {
+		catID = "GENERAL"
 	}
 
-	itemId := strings.TrimSpace(item.ItemID)
-	if itemId == "" {
-		itemId = strings.ToUpper(strings.ReplaceAll(label, " ", "_"))
+	brandID := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(item.BrandID)), "BRAND#")
+	if brandID == "" {
+		brandID = "GENERICA"
+	}
+
+	prodID := strings.TrimSpace(item.ProductID)
+	if prodID == "" {
+		prodID = uuid.New().String()
 	} else {
-		itemId = strings.ToUpper(itemId)
+		prodID = strings.TrimPrefix(prodID, "PROD#")
 	}
 
-	cleanCategory := strings.TrimPrefix(strings.ToUpper(category), "CATALOG#")
-	cleanItemID := strings.TrimPrefix(strings.ToUpper(itemId), "ITEM#")
+	estado := strings.ToUpper(strings.TrimSpace(item.Estado))
+	if estado == "" {
+		estado = "ACTIVO"
+	}
 
-	item.PK = "CATALOG#" + cleanCategory
-	item.SK = "ITEM#" + cleanItemID
-	item.Category = cleanCategory
-	item.ItemID = cleanItemID
-	item.Label = label
+	item.PK = "PROD#" + prodID
+	item.SK = "INFO_BASE"
+	item.GSI2_PK = "CAT#" + catID
+	item.GSI2_SK = "BRAND#" + brandID
+	item.ProductID = prodID
+	item.Nombre = nombre
+	item.Estado = estado
+	item.CategoryID = catID
+	item.BrandID = brandID
 
 	av, err := attributevalue.MarshalMap(item)
 	if err != nil {
-		log.Printf("Error al serializar catálogo para DynamoDB: %v", err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al preparar los datos del catálogo"})
+		log.Printf("Error al serializar producto base para DynamoDB: %v", err)
+		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al preparar datos del producto base"})
 	}
 
 	_, err = dynamoClient.PutItem(ctx, &dynamodb.PutItemInput{
@@ -117,8 +130,8 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 		Item:      av,
 	})
 	if err != nil {
-		log.Printf("Error al guardar catálogo en DynamoDB: %v", err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al registrar el ítem en el catálogo"})
+		log.Printf("Error al guardar producto base en DynamoDB: %v", err)
+		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al guardar el producto base en DynamoDB"})
 	}
 
 	return jsonResponse(http.StatusCreated, item)

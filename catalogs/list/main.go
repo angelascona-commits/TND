@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -25,16 +27,22 @@ func init() {
 		log.Fatalf("Error al cargar la configuración de AWS SDK: %v", err)
 	}
 	dynamoClient = dynamodb.NewFromConfig(cfg)
-	tableName = os.Getenv("CATALOGS_TABLE")
+	tableName = os.Getenv("MAIN_TABLE")
+	if tableName == "" {
+		tableName = os.Getenv("CATALOGS_TABLE")
+	}
 }
 
 type CatalogItem struct {
-	PK          string `json:"pk" dynamodbav:"PK"`
-	SK          string `json:"sk" dynamodbav:"SK"`
-	Name        string `json:"name" dynamodbav:"name"`
-	Description string `json:"description,omitempty" dynamodbav:"description,omitempty"`
-	CreatedAt   string `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt   string `json:"updatedAt" dynamodbav:"updatedAt"`
+	PK        string                 `json:"pk" dynamodbav:"PK"`
+	SK        string                 `json:"sk" dynamodbav:"SK"`
+	Category  string                 `json:"category,omitempty" dynamodbav:"category,omitempty"`
+	ItemID    string                 `json:"itemId,omitempty" dynamodbav:"itemId,omitempty"`
+	Label     string                 `json:"label" dynamodbav:"label"`
+	IsActive  bool                   `json:"isActive" dynamodbav:"isActive"`
+	SortOrder int                    `json:"sortOrder" dynamodbav:"sortOrder"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty" dynamodbav:"metadata,omitempty"`
+	ParentID  string                 `json:"parentId,omitempty" dynamodbav:"parentId,omitempty"`
 }
 
 func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyResponse, error) {
@@ -62,7 +70,6 @@ func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyRespo
 	}, nil
 }
 
-// handler maneja GET /catalogs
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Petición recibida en ListCatalogs: %s", req.HTTPMethod)
 
@@ -70,45 +77,58 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 		return jsonResponse(http.StatusOK, map[string]string{"status": "ok"})
 	}
 
-	catalogType := req.QueryStringParameters["type"]
+	categoriesParam := req.QueryStringParameters["categories"]
+	if categoriesParam == "" {
+		categoriesParam = req.QueryStringParameters["category"]
+	}
+	if categoriesParam == "" {
+		categoriesParam = req.QueryStringParameters["type"]
+	}
 
-	var catalogItems []CatalogItem
+	if strings.TrimSpace(categoriesParam) == "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{
+			"error": "El parámetro 'categories' o 'category' es obligatorio (ej: ?categories=CATEGORIAS,MARCAS).",
+		})
+	}
 
-	if catalogType != "" {
+	var items []CatalogItem
+
+	categoryList := strings.Split(categoriesParam, ",")
+	for _, cat := range categoryList {
+		cleanCategory := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(cat)), "CATALOG#")
+		if cleanCategory == "" {
+			continue
+		}
+		pkVal := "CATALOG#" + cleanCategory
+
 		output, err := dynamoClient.Query(ctx, &dynamodb.QueryInput{
 			TableName:              aws.String(tableName),
-			KeyConditionExpression: aws.String("PK = :pkVal"),
+			KeyConditionExpression: aws.String("PK = :pkVal AND begins_with(SK, :skPrefix)"),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":pkVal": &types.AttributeValueMemberS{Value: catalogType},
+				":pkVal":    &types.AttributeValueMemberS{Value: pkVal},
+				":skPrefix": &types.AttributeValueMemberS{Value: "ITEM#"},
 			},
 		})
 		if err != nil {
-			log.Printf("Error al consultar catálogos por PK=%s: %v", catalogType, err)
-			return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al consultar el catálogo"})
+			log.Printf("Error al consultar catálogos por PK=%s: %v", pkVal, err)
+			continue
 		}
-		if err := attributevalue.UnmarshalListOfMaps(output.Items, &catalogItems); err != nil {
-			log.Printf("Error al deserializar catálogo: %v", err)
-			return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al procesar el catálogo"})
+
+		var catItems []CatalogItem
+		if err := attributevalue.UnmarshalListOfMaps(output.Items, &catItems); err == nil {
+			items = append(items, catItems...)
 		}
+	}
+
+	if items == nil {
+		items = []CatalogItem{}
 	} else {
-		output, err := dynamoClient.Scan(ctx, &dynamodb.ScanInput{
-			TableName: aws.String(tableName),
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].SortOrder < items[j].SortOrder
 		})
-		if err != nil {
-			log.Printf("Error al realizar Scan en CatalogsTable: %v", err)
-			return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al listar la tabla de catálogos"})
-		}
-		if err := attributevalue.UnmarshalListOfMaps(output.Items, &catalogItems); err != nil {
-			log.Printf("Error al deserializar catálogo completo: %v", err)
-			return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al procesar los catálogos"})
-		}
 	}
 
-	if catalogItems == nil {
-		catalogItems = []CatalogItem{}
-	}
-
-	return jsonResponse(http.StatusOK, catalogItems)
+	return jsonResponse(http.StatusOK, items)
 }
 
 func main() {

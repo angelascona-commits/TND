@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 var dynamoClient *dynamodb.Client
@@ -24,17 +26,24 @@ func init() {
 		log.Fatalf("Error al cargar la configuración de AWS SDK: %v", err)
 	}
 	dynamoClient = dynamodb.NewFromConfig(cfg)
-	tableName = os.Getenv("ENTITIES_TABLE")
+	tableName = os.Getenv("MAIN_TABLE")
+	if tableName == "" {
+		tableName = os.Getenv("ENTITIES_TABLE")
+	}
 }
 
-type Entity struct {
-	ID        string `json:"id" dynamodbav:"id"`
-	Type      string `json:"type" dynamodbav:"type"`
-	Name      string `json:"name" dynamodbav:"name"`
-	Email     string `json:"email" dynamodbav:"email"`
-	Phone     string `json:"phone" dynamodbav:"phone"`
-	CreatedAt string `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt string `json:"updatedAt" dynamodbav:"updatedAt"`
+type EntityProfile struct {
+	PK        string `json:"pk,omitempty" dynamodbav:"PK"`
+	SK        string `json:"sk,omitempty" dynamodbav:"SK"`
+	GSI2_PK   string `json:"gsi2Pk,omitempty" dynamodbav:"GSI2_PK,omitempty"`
+	GSI2_SK   string `json:"gsi2Sk,omitempty" dynamodbav:"GSI2_SK,omitempty"`
+	DniRuc    string `json:"dniRuc" dynamodbav:"dniRuc"`
+	Nombre    string `json:"nombre" dynamodbav:"nombre"`
+	Correo    string `json:"correo,omitempty" dynamodbav:"correo,omitempty"`
+	Direccion string `json:"direccion,omitempty" dynamodbav:"direccion,omitempty"`
+	Telefono  string `json:"telefono,omitempty" dynamodbav:"telefono,omitempty"`
+	Zona      string `json:"zona,omitempty" dynamodbav:"zona,omitempty"`
+	Rol       string `json:"rol" dynamodbav:"rol"`
 }
 
 func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyResponse, error) {
@@ -62,7 +71,6 @@ func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyRespo
 	}, nil
 }
 
-// handler maneja GET /entities
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	log.Printf("Petición recibida en ListEntities: %s", req.HTTPMethod)
 
@@ -70,38 +78,74 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 		return jsonResponse(http.StatusOK, map[string]string{"status": "ok"})
 	}
 
-	entityType := req.QueryStringParameters["type"]
-
-	output, err := dynamoClient.Scan(ctx, &dynamodb.ScanInput{
-		TableName: aws.String(tableName),
-	})
-	if err != nil {
-		log.Printf("Error al realizar Scan en EntitiesTable: %v", err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al consultar la tabla de entidades"})
+	rolParam := req.QueryStringParameters["rol"]
+	if rolParam == "" {
+		rolParam = req.QueryStringParameters["type"]
+	}
+	zonaParam := req.QueryStringParameters["zona"]
+	if zonaParam == "" {
+		zonaParam = req.QueryStringParameters["zone"]
 	}
 
-	var allEntities []Entity
-	if err := attributevalue.UnmarshalListOfMaps(output.Items, &allEntities); err != nil {
-		log.Printf("Error al deserializar entidades: %v", err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al procesar la lista de entidades"})
+	cleanRol := strings.TrimSpace(rolParam)
+	cleanZona := strings.ToUpper(strings.TrimSpace(zonaParam))
+
+	if cleanRol == "" && cleanZona == "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{
+			"error": "El parámetro 'rol' (ej: ?rol=Cliente) o 'zona' (ej: ?zona=MIRAFLORES) es obligatorio.",
+		})
 	}
 
-	var result []Entity
-	if entityType != "" {
-		for _, e := range allEntities {
-			if e.Type == entityType {
-				result = append(result, e)
-			}
+	rolesToQuery := []string{}
+	if cleanRol != "" {
+		lowerRol := strings.ToLower(cleanRol)
+		if strings.HasPrefix(lowerRol, "proveedor") || strings.EqualFold(cleanRol, "SUPPLIER") {
+			rolesToQuery = append(rolesToQuery, "Proveedor")
+		} else if strings.HasPrefix(lowerRol, "cliente") || strings.EqualFold(cleanRol, "CLIENT") {
+			rolesToQuery = append(rolesToQuery, "Cliente")
+		} else {
+			rolesToQuery = append(rolesToQuery, cleanRol)
 		}
 	} else {
-		result = allEntities
+		rolesToQuery = append(rolesToQuery, "Cliente", "Proveedor")
 	}
 
-	if result == nil {
-		result = []Entity{}
+	var allEntities []EntityProfile
+
+	for _, r := range rolesToQuery {
+		gsi2PK := "ROL#" + r
+		keyCondExpr := "GSI2_PK = :gsi2PK"
+		exprValues := map[string]types.AttributeValue{
+			":gsi2PK": &types.AttributeValueMemberS{Value: gsi2PK},
+		}
+
+		if cleanZona != "" {
+			keyCondExpr += " AND begins_with(GSI2_SK, :gsi2SKPrefix)"
+			exprValues[":gsi2SKPrefix"] = &types.AttributeValueMemberS{Value: "ZONE#" + cleanZona}
+		}
+
+		output, err := dynamoClient.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(tableName),
+			IndexName:                 aws.String("GSI2"),
+			KeyConditionExpression:    aws.String(keyCondExpr),
+			ExpressionAttributeValues: exprValues,
+		})
+		if err != nil {
+			log.Printf("Error al consultar entidades en GSI2 (PK=%s): %v", gsi2PK, err)
+			continue
+		}
+
+		var entities []EntityProfile
+		if err := attributevalue.UnmarshalListOfMaps(output.Items, &entities); err == nil {
+			allEntities = append(allEntities, entities...)
+		}
 	}
 
-	return jsonResponse(http.StatusOK, result)
+	if allEntities == nil {
+		allEntities = []EntityProfile{}
+	}
+
+	return jsonResponse(http.StatusOK, allEntities)
 }
 
 func main() {

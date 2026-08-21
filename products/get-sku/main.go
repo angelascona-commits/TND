@@ -28,22 +28,19 @@ func init() {
 	dynamoClient = dynamodb.NewFromConfig(cfg)
 	tableName = os.Getenv("MAIN_TABLE")
 	if tableName == "" {
-		tableName = os.Getenv("ENTITIES_TABLE")
+		tableName = os.Getenv("PRODUCTS_TABLE")
 	}
 }
 
-type EntityProfile struct {
-	PK        string `json:"pk,omitempty" dynamodbav:"PK"`
-	SK        string `json:"sk,omitempty" dynamodbav:"SK"`
-	GSI2_PK   string `json:"gsi2Pk,omitempty" dynamodbav:"GSI2_PK,omitempty"`
-	GSI2_SK   string `json:"gsi2Sk,omitempty" dynamodbav:"GSI2_SK,omitempty"`
-	DniRuc    string `json:"dniRuc" dynamodbav:"dniRuc"`
-	Nombre    string `json:"nombre" dynamodbav:"nombre"`
-	Correo    string `json:"correo,omitempty" dynamodbav:"correo,omitempty"`
-	Direccion string `json:"direccion,omitempty" dynamodbav:"direccion,omitempty"`
-	Telefono  string `json:"telefono,omitempty" dynamodbav:"telefono,omitempty"`
-	Zona      string `json:"zona,omitempty" dynamodbav:"zona,omitempty"`
-	Rol       string `json:"rol" dynamodbav:"rol"`
+type ProductSKUItem struct {
+	PK         string  `json:"pk,omitempty" dynamodbav:"PK"`
+	SK         string  `json:"sk,omitempty" dynamodbav:"SK"`
+	ProductID  string  `json:"productId" dynamodbav:"productId"`
+	VarianteID string  `json:"varianteId" dynamodbav:"varianteId"`
+	Precio     float64 `json:"precio" dynamodbav:"precio"`
+	StockTotal int     `json:"stockTotal" dynamodbav:"stockTotal"`
+	Color      string  `json:"color,omitempty" dynamodbav:"color,omitempty"`
+	RAM        string  `json:"ram,omitempty" dynamodbav:"ram,omitempty"`
 }
 
 func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyResponse, error) {
@@ -72,46 +69,54 @@ func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyRespo
 }
 
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	log.Printf("Petición recibida en GetEntity: %s", req.HTTPMethod)
+	log.Printf("Petición recibida en GetProductSKU: %s", req.HTTPMethod)
 
 	if req.HTTPMethod == http.MethodOptions {
 		return jsonResponse(http.StatusOK, map[string]string{"status": "ok"})
 	}
 
-	rawID, ok := req.PathParameters["id"]
-	if !ok || rawID == "" {
-		rawID = req.QueryStringParameters["id"]
+	prodID := req.PathParameters["id"]
+	skuID := req.PathParameters["skuId"]
+
+	if prodID == "" {
+		prodID = req.QueryStringParameters["productId"]
 	}
-	if rawID == "" {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El parámetro 'id' (DNI/RUC) es obligatorio"})
+	if skuID == "" {
+		skuID = req.QueryStringParameters["skuId"]
 	}
 
-	cleanID := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(rawID)), "USER#")
-	pkVal := "USER#" + cleanID
+	if prodID == "" || skuID == "" {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "Los parámetros 'id' (productId) y 'skuId' son obligatorios"})
+	}
+
+	cleanProdID := strings.TrimPrefix(strings.TrimSpace(prodID), "PROD#")
+	cleanSKUID := strings.TrimPrefix(strings.TrimSpace(skuID), "SKU#")
+
+	pkVal := "PROD#" + cleanProdID
+	skVal := "SKU#" + cleanSKUID
 
 	output, err := dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: pkVal},
-			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+			"SK": &types.AttributeValueMemberS{Value: skVal},
 		},
 	})
 	if err != nil {
-		log.Printf("Error al obtener entidad por PK=%s: %v", pkVal, err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al consultar la entidad en la base de datos"})
+		log.Printf("Error al consultar variante SKU (PK=%s, SK=%s): %v", pkVal, skVal, err)
+		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al consultar la variante SKU en la base de datos"})
 	}
 
 	if output.Item == nil {
-		return jsonResponse(http.StatusNotFound, map[string]string{"error": "Entidad no encontrada"})
+		return jsonResponse(http.StatusNotFound, map[string]string{"error": "Variante SKU no encontrada"})
 	}
 
-	var entity EntityProfile
-	if err := attributevalue.UnmarshalMap(output.Item, &entity); err != nil {
-		log.Printf("Error al deserializar entidad: %v", err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al procesar los datos de la entidad"})
+	var skuItem ProductSKUItem
+	if err := attributevalue.UnmarshalMap(output.Item, &skuItem); err != nil {
+		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al procesar la variante SKU"})
 	}
 
-	return jsonResponse(http.StatusOK, entity)
+	return jsonResponse(http.StatusOK, skuItem)
 }
 
 func main() {
