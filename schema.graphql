@@ -1,0 +1,228 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+# =========================================================================
+# TIPOS PRINCIPALES
+# =========================================================================
+
+type CatalogItem {
+  category: String!
+  itemId: String!
+  label: String!
+  isActive: Boolean!
+  sortOrder: Int
+}
+
+type EntityProfile {
+  dniRuc: ID!
+  nombre: String!
+  rol: String!
+  zona: String
+  correo: String
+  telefono: String
+  direccion: String
+}
+
+type Product {
+  productId: ID!
+  nombre: String!
+  descripcion: String
+  estado: String!
+  categoryId: String!
+  brandId: String!
+  variantes: [ProductSKU]
+  seriales: [ProductSerial]
+}
+
+type ProductSKU {
+  productId: ID!
+  varianteId: String!
+  precio: Float!
+  stockTotal: Int!
+  color: String
+  ram: String
+}
+
+type ProductSerial {
+  productId: ID!
+  numeroSerie: String!
+  skuAsociado: String
+  estadoFisico: String
+  ubicacion: String
+}
+
+type OrderHeader {
+  trxId: ID!
+  userDniRuc: String!
+  tipoOperacion: String!
+  total: Float!
+  estadoPago: String!
+  fecha: String!
+}
+
+type OrderDetail {
+  trxId: ID!
+  productId: String!
+  skuId: String!
+  serialNumber: String
+  cantidad: Int!
+  precioUnitario: Float!
+  subtotal: Float!
+}
+
+type OrderFull {
+  header: OrderHeader!
+  detalles: [OrderDetail]!
+}
+
+type SerialTraceResult {
+  serialNumber: String!
+  records: [ProductSerial]!
+}
+
+# =========================================================================
+# INPUTS
+# =========================================================================
+
+input CreateCatalogInput {
+  category: String!
+  itemId: String
+  label: String!
+  sortOrder: Int
+  isActive: Boolean
+}
+
+input UpdateCatalogInput {
+  category: String!
+  itemId: String!
+  label: String
+  sortOrder: Int
+  isActive: Boolean
+}
+
+input CreateEntityInput {
+  dniRuc: ID!
+  nombre: String!
+  rol: String!
+  zona: String
+  correo: String
+  telefono: String
+  direccion: String
+}
+
+input UpdateEntityInput {
+  dniRuc: ID!
+  nombre: String
+  rol: String
+  zona: String
+  correo: String
+  telefono: String
+  direccion: String
+}
+
+input CreateProductInput {
+  productId: ID
+  nombre: String!
+  descripcion: String
+  categoryId: String
+  brandId: String
+  estado: String
+}
+
+input UpdateProductInput {
+  productId: ID!
+  nombre: String
+  descripcion: String
+  categoryId: String
+  brandId: String
+  estado: String
+}
+
+input CreateSKUInput {
+  varianteId: String
+  precio: Float!
+  stockTotal: Int
+  color: String
+  ram: String
+}
+
+input CreateSerialInput {
+  numeroSerie: String!
+  skuAsociado: String
+  estadoFisico: String
+  ubicacion: String
+}
+
+input OrderItemInput {
+  productId: String!
+  skuId: String!
+  serialNumber: String
+  cantidad: Int!
+  precioUnitario: Float!
+}
+
+input CreateOrderInput {
+  trxId: ID
+  userDniRuc: String!
+  tipoOperacion: String!
+  estadoPago: String
+  items: [OrderItemInput!]!
+}
+
+# =========================================================================
+# QUERIES
+# =========================================================================
+
+type Query {
+  # Catálogos
+  listCatalogs(category: String!): [CatalogItem]!
+  
+  # Entidades (Clientes y Proveedores)
+  getEntity(dniRuc: ID!): EntityProfile
+  listEntities(rol: String, zona: String): [EntityProfile]!
+  
+  # Productos
+  getProduct(productId: ID!): Product
+  listProducts(category: String, brand: String): [Product]!
+  listProductSKUs(productId: ID!): [ProductSKU]!
+  listProductSerials(productId: ID!): [ProductSerial]!
+  
+  # Transacciones / Órdenes
+  getOrder(trxId: ID!): OrderFull
+  listOrders(user: String, tipo: String, fromDate: String, toDate: String): [OrderHeader]!
+  searchWarrantyBySN(serialNumber: String!): SerialTraceResult
+}
+
+# =========================================================================
+# MUTATIONS
+# =========================================================================
+
+type Mutation {
+  # Catálogos
+  createCatalog(input: CreateCatalogInput!): CatalogItem!
+  updateCatalog(input: UpdateCatalogInput!): CatalogItem!
+  deleteCatalog(category: String!, itemId: String!): Boolean!
+  
+  # Entidades
+  createEntity(input: CreateEntityInput!): EntityProfile!
+  updateEntity(input: UpdateEntityInput!): EntityProfile!
+  deleteEntity(dniRuc: ID!): Boolean!
+  
+  # Productos
+  createProduct(input: CreateProductInput!): Product!
+  updateProduct(input: UpdateProductInput!): Product!
+  deleteProduct(productId: ID!, categoryId: String!, brandId: String!): Boolean!
+  
+  # Variantes SKU
+  createProductSKU(productId: ID!, input: CreateSKUInput!): ProductSKU!
+  deleteProductSKU(productId: ID!, varianteId: String!): Boolean!
+  
+  # Seriales
+  createProductSerial(productId: ID!, input: CreateSerialInput!): ProductSerial!
+  deleteProductSerial(productId: ID!, numeroSerie: String!): Boolean!
+  
+  # Transacciones / Órdenes (Ejecutada por Lambda Go atómica)
+  createOrder(input: CreateOrderInput!): OrderFull!
+}

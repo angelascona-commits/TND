@@ -1,11 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Retail Inventory System - Single Table Design DynamoDB (Catálogos, Entidades, Productos y Transacciones con PATCH)
+  Retail Inventory System - GraphQL API con AWS AppSync y DynamoDB Single Table Design
 
 Globals:
   Function:
-    Timeout: 5
+    Timeout: 10
     MemorySize: 128
     Runtime: provided.al2023
     Architectures:
@@ -15,7 +15,6 @@ Globals:
         MAIN_TABLE: !Ref RetailMainTable
 
 Resources:
-  # --- TABLA ÚNICA DYNAMODB (SINGLE-TABLE DESIGN) ---
   RetailMainTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -57,509 +56,853 @@ Resources:
             ProjectionType: ALL
       BillingMode: PAY_PER_REQUEST
 
-  # --- API GATEWAY REST ---
-  RetailApi:
-    Type: AWS::Serverless::Api
+  AppSyncServiceRole:
+    Type: AWS::IAM::Role
     Properties:
-      StageName: prod
-      Cors:
-        AllowMethods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
-        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-        AllowOrigin: "'*'"
-
-  # --- DOMINIO 1: CATÁLOGOS GLOBALES (PARAMETRÍA) ---
-  ListCatalogsFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
-    Properties:
-      CodeUri: catalogs/list/
-      Handler: bootstrap
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - appsync.amazonaws.com
+            Action:
+              - sts:AssumeRole
       Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /catalogs
-            Method: GET
+        - PolicyName: AppSyncDDBAndLambdaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  - !GetAtt RetailMainTable.Arn
+                  - !Sub "${RetailMainTable.Arn}/index/*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt CreateOrderFunction.Arn
 
-  CreateCatalogFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  AppSyncApi:
+    Type: AWS::AppSync::GraphQLApi
     Properties:
-      CodeUri: catalogs/create/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /catalogs
-            Method: POST
+      Name: !Sub "${AWS::StackName}-graphql-api"
+      AuthenticationType: API_KEY
 
-  UpdateCatalogFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  AppSyncApiKey:
+    Type: AWS::AppSync::ApiKey
     Properties:
-      CodeUri: catalogs/update/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /catalogs
-            Method: PATCH
+      ApiId: !GetAtt AppSyncApi.ApiId
+      Description: Default API Key for Retail Inventory Frontend
 
-  DeleteCatalogFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  AppSyncSchema:
+    Type: AWS::AppSync::GraphQLSchema
     Properties:
-      CodeUri: catalogs/delete/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /catalogs
-            Method: DELETE
+      ApiId: !GetAtt AppSyncApi.ApiId
+      DefinitionS3Location: ./schema.graphql
 
-  # --- DOMINIO 2: ENTIDADES (CLIENTES Y PROVEEDORES) ---
-  ListEntitiesFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  DDBDataSource:
+    Type: AWS::AppSync::DataSource
     Properties:
-      CodeUri: entities/list/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /entities
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      Name: RetailDDBDataSource
+      Type: AMAZON_DYNAMODB
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+      DynamoDBConfig:
+        TableName: !Ref RetailMainTable
+        AwsRegion: !Ref AWS::Region
 
-  CreateEntityFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  CreateOrderDataSource:
+    Type: AWS::AppSync::DataSource
     Properties:
-      CodeUri: entities/create/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /entities
-            Method: POST
+      ApiId: !GetAtt AppSyncApi.ApiId
+      Name: CreateOrderLambdaDataSource
+      Type: AWS_LAMBDA
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt CreateOrderFunction.Arn
 
-  GetEntityFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  # =========================================================================
+  # QUERIES - RESOLVERS DIRECTOS A DYNAMODB
+  # =========================================================================
+
+  ListCatalogsResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: entities/get/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /entities/{id}
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: listCatalogs
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cat = $ctx.args.category.toUpperCase().replace("CATALOG#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "query": {
+            "expression": "PK = :pk AND begins_with(SK, :skPrefix)",
+            "expressionValues": {
+              ":pk": $util.dynamodb.toDynamoDBJson("CATALOG#${cat}"),
+              ":skPrefix": $util.dynamodb.toDynamoDBJson("ITEM#")
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  UpdateEntityFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  GetEntityResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: entities/update/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /entities
-            Method: PATCH
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: getEntity
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cleanId = $ctx.args.dniRuc.toUpperCase().replace("USER#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "GetItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("USER#${cleanId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("PROFILE")
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
 
-  DeleteEntityFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  ListEntitiesResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: entities/delete/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /entities/{id}
-            Method: DELETE
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: listEntities
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($rol = $util.defaultIfNullOrBlank($ctx.args.rol, "Cliente"))
+        #set($hasZona = !$util.isNullOrBlank($ctx.args.zona))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "index": "GSI2",
+          #if( $hasZona )
+            #set($cleanZona = $ctx.args.zona.toUpperCase().replace("ZONE#", ""))
+            "query": {
+              "expression": "GSI2_PK = :gsi2pk AND begins_with(GSI2_SK, :zonePrefix)",
+              "expressionValues": {
+                ":gsi2pk": $util.dynamodb.toDynamoDBJson("ROL#${rol}"),
+                ":zonePrefix": $util.dynamodb.toDynamoDBJson("ZONE#${cleanZona}")
+              }
+            }
+          #else
+            "query": {
+              "expression": "GSI2_PK = :gsi2pk",
+              "expressionValues": {
+                ":gsi2pk": $util.dynamodb.toDynamoDBJson("ROL#${rol}")
+              }
+            }
+          #end
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  # --- DOMINIO 3: INVENTARIO Y PRODUCTOS (MICROSERVICIOS INDEPENDIENTES CON NOMENCLATURA EXPLÍCITA) ---
-
-  # 3.1 PRODUCTO BASE (INFO_BASE)
-  ListProductsBaseFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  GetProductResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/list-base/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: getProduct
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cleanId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "GetItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${cleanId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("INFO_BASE")
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
 
-  GetProductBaseFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  ListProductsResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/get-base/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: listProducts
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($hasCat = !$util.isNullOrBlank($ctx.args.category))
+        #set($hasBrand = !$util.isNullOrBlank($ctx.args.brand))
+        #set($cat = $util.defaultIfNullOrBlank($ctx.args.category, "GENERAL").toUpperCase().replace("CAT#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "index": "GSI2",
+          #if( $hasBrand )
+            #set($brand = $ctx.args.brand.toUpperCase().replace("BRAND#", ""))
+            "query": {
+              "expression": "GSI2_PK = :gsi2pk AND GSI2_SK = :gsi2sk",
+              "expressionValues": {
+                ":gsi2pk": $util.dynamodb.toDynamoDBJson("CAT#${cat}"),
+                ":gsi2sk": $util.dynamodb.toDynamoDBJson("BRAND#${brand}")
+              }
+            }
+          #else
+            "query": {
+              "expression": "GSI2_PK = :gsi2pk",
+              "expressionValues": {
+                ":gsi2pk": $util.dynamodb.toDynamoDBJson("CAT#${cat}")
+              }
+            }
+          #end
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  CreateProductBaseFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  ListProductSKUsResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/create-base/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products
-            Method: POST
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: listProductSKUs
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cleanId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "query": {
+            "expression": "PK = :pk AND begins_with(SK, :skPrefix)",
+            "expressionValues": {
+              ":pk": $util.dynamodb.toDynamoDBJson("PROD#${cleanId}"),
+              ":skPrefix": $util.dynamodb.toDynamoDBJson("SKU#")
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  UpdateProductBaseFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  ListProductSerialsResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/update-base/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products
-            Method: PATCH
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: listProductSerials
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cleanId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "query": {
+            "expression": "PK = :pk AND begins_with(SK, :skPrefix)",
+            "expressionValues": {
+              ":pk": $util.dynamodb.toDynamoDBJson("PROD#${cleanId}"),
+              ":skPrefix": $util.dynamodb.toDynamoDBJson("SN#")
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  DeleteProductBaseFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  GetOrderResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/delete-base/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}
-            Method: DELETE
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: getOrder
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cleanId = $ctx.args.trxId.toUpperCase().replace("TRX#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "GetItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("TRX#${cleanId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("HEADER")
+          }
+        }
+      ResponseMappingTemplate: >
+        #if( $util.isNull($ctx.result) )
+          null
+        #else
+          {
+            "header": $util.toJson($ctx.result)
+          }
+        #end
 
-  # 3.2 VARIANTES DE PRODUCTO (SKU)
-  ListProductSkuFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  ListOrdersResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/list-sku/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/skus
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: listOrders
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($hasUser = !$util.isNullOrBlank($ctx.args.user))
+        #set($hasTipo = !$util.isNullOrBlank($ctx.args.tipo))
+        #set($hasFrom = !$util.isNullOrBlank($ctx.args.fromDate))
+        #set($hasTo = !$util.isNullOrBlank($ctx.args.toDate))
+        #if( $hasUser )
+          #set($cleanUser = $ctx.args.user.toUpperCase().replace("USER#", ""))
+          {
+            "version": "2017-02-28",
+            "operation": "Query",
+            "index": "GSI1",
+            "query": {
+              #if( $hasFrom && $hasTo )
+                "expression": "GSI1_PK = :gsi1pk AND GSI1_SK BETWEEN :from AND :to",
+                "expressionValues": {
+                  ":gsi1pk": $util.dynamodb.toDynamoDBJson("USER#${cleanUser}"),
+                  ":from": $util.dynamodb.toDynamoDBJson($ctx.args.fromDate),
+                  ":to": $util.dynamodb.toDynamoDBJson($ctx.args.toDate)
+                }
+              #else
+                "expression": "GSI1_PK = :gsi1pk",
+                "expressionValues": {
+                  ":gsi1pk": $util.dynamodb.toDynamoDBJson("USER#${cleanUser}")
+                }
+              #end
+            },
+            "scanIndexForward": false
+          }
+        #else
+          #set($tipo = $util.defaultIfNullOrBlank($ctx.args.tipo, "Venta"))
+          {
+            "version": "2017-02-28",
+            "operation": "Query",
+            "index": "GSI2",
+            "query": {
+              #if( $hasFrom && $hasTo )
+                "expression": "GSI2_PK = :gsi2pk AND GSI2_SK BETWEEN :from AND :to",
+                "expressionValues": {
+                  ":gsi2pk": $util.dynamodb.toDynamoDBJson("TYPE#${tipo}"),
+                  ":from": $util.dynamodb.toDynamoDBJson($ctx.args.fromDate),
+                  ":to": $util.dynamodb.toDynamoDBJson($ctx.args.toDate)
+                }
+              #else
+                "expression": "GSI2_PK = :gsi2pk",
+                "expressionValues": {
+                  ":gsi2pk": $util.dynamodb.toDynamoDBJson("TYPE#${tipo}")
+                }
+              #end
+            },
+            "scanIndexForward": false
+          }
+        #end
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  CreateProductSkuFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  SearchWarrantyBySNResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/create-sku/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/skus
-            Method: POST
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Query
+      FieldName: searchWarrantyBySN
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cleanSN = $ctx.args.serialNumber.toUpperCase().replace("SN#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "index": "GSI1",
+          "query": {
+            "expression": "GSI1_PK = :gsi1pk",
+            "expressionValues": {
+              ":gsi1pk": $util.dynamodb.toDynamoDBJson("SN#${cleanSN}")
+            }
+          }
+        }
+      ResponseMappingTemplate: >
+        {
+          "serialNumber": $util.toJson($ctx.args.serialNumber),
+          "records": $util.toJson($ctx.result.items)
+        }
 
-  GetProductSkuFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
-    Properties:
-      CodeUri: products/get-sku/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/skus/{skuId}
-            Method: GET
+  # =========================================================================
+  # RESOLVERS ANIDADOS (Product.variantes, Product.seriales, OrderFull.detalles)
+  # =========================================================================
 
-  UpdateProductSkuFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  ProductVariantesResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/update-sku/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/skus
-            Method: PATCH
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Product
+      FieldName: variantes
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.source.productId.toUpperCase().replace("PROD#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "query": {
+            "expression": "PK = :pk AND begins_with(SK, :skPrefix)",
+            "expressionValues": {
+              ":pk": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+              ":skPrefix": $util.dynamodb.toDynamoDBJson("SKU#")
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  DeleteProductSkuFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  ProductSerialesResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/delete-sku/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/skus/{skuId}
-            Method: DELETE
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Product
+      FieldName: seriales
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.source.productId.toUpperCase().replace("PROD#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "query": {
+            "expression": "PK = :pk AND begins_with(SK, :skPrefix)",
+            "expressionValues": {
+              ":pk": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+              ":skPrefix": $util.dynamodb.toDynamoDBJson("SN#")
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  # 3.3 UNIDADES SERIALIZADAS FÍSICAS (SN)
-  ListProductSerialFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  OrderFullDetallesResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/list-serial/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/serials
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: OrderFull
+      FieldName: detalles
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($trxId = $ctx.source.header.trxId.toUpperCase().replace("TRX#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "Query",
+          "query": {
+            "expression": "PK = :pk AND begins_with(SK, :skPrefix)",
+            "expressionValues": {
+              ":pk": $util.dynamodb.toDynamoDBJson("TRX#${trxId}"),
+              ":skPrefix": $util.dynamodb.toDynamoDBJson("DETAIL#")
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result.items)
 
-  CreateProductSerialFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
-    Properties:
-      CodeUri: products/create-serial/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/serials
-            Method: POST
+  # =========================================================================
+  # MUTATIONS - DIRECTAS A DYNAMODB
+  # =========================================================================
 
-  GetProductSerialFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  CreateCatalogResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/get-serial/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/serials/{sn}
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createCatalog
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cat = $ctx.args.input.category.toUpperCase().replace("CATALOG#", ""))
+        #set($rawItemId = $util.defaultIfNullOrBlank($ctx.args.input.itemId, $ctx.args.input.label.toUpperCase().replace(" ", "_")))
+        #set($itemId = $rawItemId.toUpperCase().replace("ITEM#", ""))
+        #set($isActive = $util.defaultIfNull($ctx.args.input.isActive, true))
+        #set($sortOrder = $util.defaultIfNull($ctx.args.input.sortOrder, 1))
+        {
+          "version": "2017-02-28",
+          "operation": "PutItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("CATALOG#${cat}"),
+            "SK": $util.dynamodb.toDynamoDBJson("ITEM#${itemId}")
+          },
+          "attributeValues": {
+            "category": $util.dynamodb.toDynamoDBJson($cat),
+            "itemId": $util.dynamodb.toDynamoDBJson($itemId),
+            "label": $util.dynamodb.toDynamoDBJson($ctx.args.input.label),
+            "isActive": $util.dynamodb.toDynamoDBJson($isActive),
+            "sortOrder": $util.dynamodb.toDynamoDBJson($sortOrder)
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
 
-  UpdateProductSerialFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  UpdateCatalogResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/update-serial/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/serials
-            Method: PATCH
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: updateCatalog
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cat = $ctx.args.input.category.toUpperCase().replace("CATALOG#", ""))
+        #set($itemId = $ctx.args.input.itemId.toUpperCase().replace("ITEM#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "UpdateItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("CATALOG#${cat}"),
+            "SK": $util.dynamodb.toDynamoDBJson("ITEM#${itemId}")
+          },
+          "update": {
+            "expression": "SET #lbl = :lbl, isActive = :act, sortOrder = :sort",
+            "expressionNames": {
+              "#lbl": "label"
+            },
+            "expressionValues": {
+              ":lbl": $util.dynamodb.toDynamoDBJson($ctx.args.input.label),
+              ":act": $util.dynamodb.toDynamoDBJson($util.defaultIfNull($ctx.args.input.isActive, true)),
+              ":sort": $util.dynamodb.toDynamoDBJson($util.defaultIfNull($ctx.args.input.sortOrder, 1))
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
 
-  DeleteProductSerialFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  DeleteCatalogResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: products/delete-serial/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /products/{id}/serials/{sn}
-            Method: DELETE
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteCatalog
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($cat = $ctx.args.category.toUpperCase().replace("CATALOG#", ""))
+        #set($itemId = $ctx.args.itemId.toUpperCase().replace("ITEM#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "DeleteItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("CATALOG#${cat}"),
+            "SK": $util.dynamodb.toDynamoDBJson("ITEM#${itemId}")
+          }
+        }
+      ResponseMappingTemplate: "true"
 
-  # --- DOMINIO 4: TRANSACCIONES (COMPRAS Y VENTAS) ---
-  ListOrdersFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  CreateEntityResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: orders/list-order/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /orders
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createEntity
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($dniRuc = $ctx.args.input.dniRuc.toUpperCase().replace("USER#", ""))
+        #set($rol = $util.defaultIfNullOrBlank($ctx.args.input.rol, "Cliente"))
+        #set($zona = $util.defaultIfNullOrBlank($ctx.args.input.zona, "").toUpperCase().replace("ZONE#", ""))
+        #if( !$util.isNullOrBlank($zona) )
+          #set($gsi2sk = "ZONE#${zona}#USER#${dniRuc}")
+        #else
+          #set($gsi2sk = "USER#${dniRuc}")
+        #end
+        {
+          "version": "2017-02-28",
+          "operation": "PutItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("USER#${dniRuc}"),
+            "SK": $util.dynamodb.toDynamoDBJson("PROFILE")
+          },
+          "attributeValues": {
+            "dniRuc": $util.dynamodb.toDynamoDBJson($dniRuc),
+            "nombre": $util.dynamodb.toDynamoDBJson($ctx.args.input.nombre),
+            "rol": $util.dynamodb.toDynamoDBJson($rol),
+            "zona": $util.dynamodb.toDynamoDBJson($ctx.args.input.zona),
+            "correo": $util.dynamodb.toDynamoDBJson($ctx.args.input.correo),
+            "telefono": $util.dynamodb.toDynamoDBJson($ctx.args.input.telefono),
+            "direccion": $util.dynamodb.toDynamoDBJson($ctx.args.input.direccion),
+            "GSI2_PK": $util.dynamodb.toDynamoDBJson("ROL#${rol}"),
+            "GSI2_SK": $util.dynamodb.toDynamoDBJson($gsi2sk)
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
 
-  SearchOrderFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  UpdateEntityResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: orders/search-order/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /orders/search
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: updateEntity
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($dniRuc = $ctx.args.input.dniRuc.toUpperCase().replace("USER#", ""))
+        #set($rol = $util.defaultIfNullOrBlank($ctx.args.input.rol, "Cliente"))
+        #set($zona = $util.defaultIfNullOrBlank($ctx.args.input.zona, "").toUpperCase().replace("ZONE#", ""))
+        #if( !$util.isNullOrBlank($zona) )
+          #set($gsi2sk = "ZONE#${zona}#USER#${dniRuc}")
+        #else
+          #set($gsi2sk = "USER#${dniRuc}")
+        #end
+        {
+          "version": "2017-02-28",
+          "operation": "UpdateItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("USER#${dniRuc}"),
+            "SK": $util.dynamodb.toDynamoDBJson("PROFILE")
+          },
+          "update": {
+            "expression": "SET nombre = :nom, rol = :rol, zona = :zona, correo = :cor, telefono = :tel, direccion = :dir, GSI2_PK = :gsi2pk, GSI2_SK = :gsi2sk",
+            "expressionValues": {
+              ":nom": $util.dynamodb.toDynamoDBJson($ctx.args.input.nombre),
+              ":rol": $util.dynamodb.toDynamoDBJson($rol),
+              ":zona": $util.dynamodb.toDynamoDBJson($ctx.args.input.zona),
+              ":cor": $util.dynamodb.toDynamoDBJson($ctx.args.input.correo),
+              ":tel": $util.dynamodb.toDynamoDBJson($ctx.args.input.telefono),
+              ":dir": $util.dynamodb.toDynamoDBJson($ctx.args.input.direccion),
+              ":gsi2pk": $util.dynamodb.toDynamoDBJson("ROL#${rol}"),
+              ":gsi2sk": $util.dynamodb.toDynamoDBJson($gsi2sk)
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
 
-  GetOrderFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
+  DeleteEntityResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
     Properties:
-      CodeUri: orders/get-order/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /orders/{id}
-            Method: GET
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteEntity
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($dniRuc = $ctx.args.dniRuc.toUpperCase().replace("USER#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "DeleteItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("USER#${dniRuc}"),
+            "SK": $util.dynamodb.toDynamoDBJson("PROFILE")
+          }
+        }
+      ResponseMappingTemplate: "true"
+
+  CreateProductResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createProduct
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $util.defaultIfNullOrBlank($ctx.args.input.productId, $util.autoId()).toUpperCase().replace("PROD#", ""))
+        #set($cat = $util.defaultIfNullOrBlank($ctx.args.input.categoryId, "GENERAL").toUpperCase().replace("CAT#", ""))
+        #set($brand = $util.defaultIfNullOrBlank($ctx.args.input.brandId, "GENERICA").toUpperCase().replace("BRAND#", ""))
+        #set($estado = $util.defaultIfNullOrBlank($ctx.args.input.estado, "ACTIVO").toUpperCase())
+        {
+          "version": "2017-02-28",
+          "operation": "PutItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("INFO_BASE")
+          },
+          "attributeValues": {
+            "productId": $util.dynamodb.toDynamoDBJson($pId),
+            "nombre": $util.dynamodb.toDynamoDBJson($ctx.args.input.nombre),
+            "descripcion": $util.dynamodb.toDynamoDBJson($ctx.args.input.descripcion),
+            "categoryId": $util.dynamodb.toDynamoDBJson($cat),
+            "brandId": $util.dynamodb.toDynamoDBJson($brand),
+            "estado": $util.dynamodb.toDynamoDBJson($estado),
+            "GSI2_PK": $util.dynamodb.toDynamoDBJson("CAT#${cat}"),
+            "GSI2_SK": $util.dynamodb.toDynamoDBJson("BRAND#${brand}")
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
+
+  UpdateProductResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: updateProduct
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.args.input.productId.toUpperCase().replace("PROD#", ""))
+        #set($cat = $util.defaultIfNullOrBlank($ctx.args.input.categoryId, "GENERAL").toUpperCase().replace("CAT#", ""))
+        #set($brand = $util.defaultIfNullOrBlank($ctx.args.input.brandId, "GENERICA").toUpperCase().replace("BRAND#", ""))
+        #set($estado = $util.defaultIfNullOrBlank($ctx.args.input.estado, "ACTIVO").toUpperCase())
+        {
+          "version": "2017-02-28",
+          "operation": "UpdateItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("INFO_BASE")
+          },
+          "update": {
+            "expression": "SET nombre = :nom, descripcion = :desc, categoryId = :cat, brandId = :brand, estado = :est, GSI2_PK = :gsi2pk, GSI2_SK = :gsi2sk",
+            "expressionValues": {
+              ":nom": $util.dynamodb.toDynamoDBJson($ctx.args.input.nombre),
+              ":desc": $util.dynamodb.toDynamoDBJson($ctx.args.input.descripcion),
+              ":cat": $util.dynamodb.toDynamoDBJson($cat),
+              ":brand": $util.dynamodb.toDynamoDBJson($brand),
+              ":est": $util.dynamodb.toDynamoDBJson($estado),
+              ":gsi2pk": $util.dynamodb.toDynamoDBJson("CAT#${cat}"),
+              ":gsi2sk": $util.dynamodb.toDynamoDBJson("BRAND#${brand}")
+            }
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
+
+  DeleteProductResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteProduct
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "DeleteItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("INFO_BASE")
+          }
+        }
+      ResponseMappingTemplate: "true"
+
+  CreateProductSKUResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createProductSKU
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        #set($vId = $util.defaultIfNullOrBlank($ctx.args.input.varianteId, "V1").toUpperCase().replace("SKU#", ""))
+        #set($stock = $util.defaultIfNull($ctx.args.input.stockTotal, 0))
+        {
+          "version": "2017-02-28",
+          "operation": "PutItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("SKU#${vId}")
+          },
+          "attributeValues": {
+            "productId": $util.dynamodb.toDynamoDBJson($pId),
+            "varianteId": $util.dynamodb.toDynamoDBJson($vId),
+            "precio": $util.dynamodb.toDynamoDBJson($ctx.args.input.precio),
+            "stockTotal": $util.dynamodb.toDynamoDBJson($stock),
+            "color": $util.dynamodb.toDynamoDBJson($ctx.args.input.color),
+            "ram": $util.dynamodb.toDynamoDBJson($ctx.args.input.ram)
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
+
+  DeleteProductSKUResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteProductSKU
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        #set($vId = $ctx.args.varianteId.toUpperCase().replace("SKU#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "DeleteItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("SKU#${vId}")
+          }
+        }
+      ResponseMappingTemplate: "true"
+
+  CreateProductSerialResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createProductSerial
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        #set($sn = $ctx.args.input.numeroSerie.toUpperCase().replace("SN#", ""))
+        #set($sku = $util.defaultIfNullOrBlank($ctx.args.input.skuAsociado, "V1").toUpperCase().replace("SKU#", ""))
+        #set($estado = $util.defaultIfNullOrBlank($ctx.args.input.estadoFisico, "Disponible"))
+        {
+          "version": "2017-02-28",
+          "operation": "PutItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("SN#${sn}")
+          },
+          "attributeValues": {
+            "productId": $util.dynamodb.toDynamoDBJson($pId),
+            "numeroSerie": $util.dynamodb.toDynamoDBJson($sn),
+            "skuAsociado": $util.dynamodb.toDynamoDBJson($sku),
+            "estadoFisico": $util.dynamodb.toDynamoDBJson($estado),
+            "ubicacion": $util.dynamodb.toDynamoDBJson($ctx.args.input.ubicacion),
+            "GSI1_PK": $util.dynamodb.toDynamoDBJson("SN#${sn}"),
+            "GSI1_SK": $util.dynamodb.toDynamoDBJson("INFO")
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
+
+  DeleteProductSerialResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: deleteProductSerial
+      DataSourceName: !GetAtt DDBDataSource.Name
+      RequestMappingTemplate: >
+        #set($pId = $ctx.args.productId.toUpperCase().replace("PROD#", ""))
+        #set($sn = $ctx.args.numeroSerie.toUpperCase().replace("SN#", ""))
+        {
+          "version": "2017-02-28",
+          "operation": "DeleteItem",
+          "key": {
+            "PK": $util.dynamodb.toDynamoDBJson("PROD#${pId}"),
+            "SK": $util.dynamodb.toDynamoDBJson("SN#${sn}")
+          }
+        }
+      ResponseMappingTemplate: "true"
+
+  # =========================================================================
+  # MUTATION TRANSACCIONAL (LAMBDA EN GO)
+  # =========================================================================
+
+  CreateOrderResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn: AppSyncSchema
+    Properties:
+      ApiId: !GetAtt AppSyncApi.ApiId
+      TypeName: Mutation
+      FieldName: createOrder
+      DataSourceName: !GetAtt CreateOrderDataSource.Name
+      RequestMappingTemplate: >
+        {
+          "version": "2018-05-29",
+          "operation": "Invoke",
+          "payload": {
+            "input": $util.toJson($ctx.args.input)
+          }
+        }
+      ResponseMappingTemplate: $util.toJson($ctx.result)
 
   CreateOrderFunction:
     Type: AWS::Serverless::Function
@@ -571,54 +914,20 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /orders
-            Method: POST
-
-  UpdateOrderFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
-    Properties:
-      CodeUri: orders/update-order/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /orders
-            Method: PATCH
-
-  DeleteOrderFunction:
-    Type: AWS::Serverless::Function
-    Metadata:
-      BuildMethod: go1.x
-    Properties:
-      CodeUri: orders/delete-order/
-      Handler: bootstrap
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref RetailMainTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RetailApi
-            Path: /orders/{id}
-            Method: DELETE
 
 Outputs:
-  ApiEndpoint:
-    Description: "API Gateway endpoint URL"
-    Value: !Sub "https://${RetailApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
+  GraphQLApiUrl:
+    Description: Endpoint URL de AWS AppSync GraphQL
+    Value: !GetAtt AppSyncApi.GraphQLUrl
+
+  GraphQLApiKey:
+    Description: Clave de autenticación API Key para GraphQL
+    Value: !GetAtt AppSyncApiKey.ApiKey
+
+  GraphQLApiId:
+    Description: Identificador único de la API AppSync
+    Value: !GetAtt AppSyncApi.ApiId
+
   MainTableName:
-    Description: "Nombre de la Tabla Única en DynamoDB"
+    Description: Nombre de la tabla DynamoDB Single-Table
     Value: !Ref RetailMainTable

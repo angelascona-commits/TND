@@ -36,10 +36,10 @@ func init() {
 }
 
 type OrderHeaderItem struct {
-	PK            string  `json:"pk" dynamodbav:"PK"`
-	SK            string  `json:"sk" dynamodbav:"SK"`
-	GSI1_PK       string  `json:"gsi1Pk" dynamodbav:"GSI1_PK"`
-	GSI1_SK       string  `json:"gsi1Sk" dynamodbav:"GSI1_SK"`
+	PK            string  `json:"pk,omitempty" dynamodbav:"PK"`
+	SK            string  `json:"sk,omitempty" dynamodbav:"SK"`
+	GSI1_PK       string  `json:"gsi1Pk,omitempty" dynamodbav:"GSI1_PK"`
+	GSI1_SK       string  `json:"gsi1Sk,omitempty" dynamodbav:"GSI1_SK"`
 	GSI2_PK       string  `json:"gsi2Pk,omitempty" dynamodbav:"GSI2_PK,omitempty"`
 	GSI2_SK       string  `json:"gsi2Sk,omitempty" dynamodbav:"GSI2_SK,omitempty"`
 	TrxID         string  `json:"trxId" dynamodbav:"trxId"`
@@ -51,8 +51,8 @@ type OrderHeaderItem struct {
 }
 
 type OrderDetailItem struct {
-	PK             string  `json:"pk" dynamodbav:"PK"`
-	SK             string  `json:"sk" dynamodbav:"SK"`
+	PK             string  `json:"pk,omitempty" dynamodbav:"PK"`
+	SK             string  `json:"sk,omitempty" dynamodbav:"SK"`
 	TrxID          string  `json:"trxId" dynamodbav:"trxId"`
 	ProductID      string  `json:"productId" dynamodbav:"productId"`
 	SKUID          string  `json:"skuId" dynamodbav:"skuId"`
@@ -79,46 +79,22 @@ type CreateOrderRequest struct {
 	Items         []CreateOrderItemRequest `json:"items"`
 }
 
-func jsonResponse(statusCode int, body interface{}) (events.APIGatewayProxyResponse, error) {
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusInternalServerError,
-			Headers: map[string]string{
-				"Content-Type":                 "application/json",
-				"Access-Control-Allow-Origin":  "*",
-				"Access-Control-Allow-Methods": "POST,OPTIONS",
-			},
-			Body: `{"error": "Error interno al serializar respuesta JSON"}`,
-		}, nil
-	}
-
-	return events.APIGatewayProxyResponse{
-		StatusCode: statusCode,
-		Headers: map[string]string{
-			"Content-Type":                 "application/json",
-			"Access-Control-Allow-Origin":  "*",
-			"Access-Control-Allow-Methods": "POST,OPTIONS",
-		},
-		Body: string(jsonBody),
-	}, nil
+type OrderFullResponse struct {
+	Header   OrderHeaderItem   `json:"header"`
+	Detalles []OrderDetailItem `json:"detalles"`
 }
 
-func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	log.Printf("Petición recibida en CreateOrder: %s", req.HTTPMethod)
+type AppSyncEvent struct {
+	Input     *CreateOrderRequest `json:"input,omitempty"`
+	Arguments struct {
+		Input *CreateOrderRequest `json:"input,omitempty"`
+	} `json:"arguments,omitempty"`
+}
 
-	if req.HTTPMethod == http.MethodOptions {
-		return jsonResponse(http.StatusOK, map[string]string{"status": "ok"})
-	}
-
-	var reqBody CreateOrderRequest
-	if err := json.Unmarshal([]byte(req.Body), &reqBody); err != nil {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "Formato JSON de entrada inválido"})
-	}
-
+func processOrder(ctx context.Context, reqBody CreateOrderRequest) (*OrderFullResponse, error) {
 	userDniRuc := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(reqBody.UserDniRuc)), "USER#")
 	if userDniRuc == "" {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "El campo 'userDniRuc' es obligatorio"})
+		return nil, fmt.Errorf("el campo 'userDniRuc' es obligatorio")
 	}
 
 	tipoOp := strings.TrimSpace(reqBody.TipoOperacion)
@@ -129,7 +105,7 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 	}
 
 	if len(reqBody.Items) == 0 {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "La orden debe contener al menos un ítem de detalle"})
+		return nil, fmt.Errorf("la orden debe contener al menos un ítem de detalle")
 	}
 
 	trxID := strings.TrimSpace(reqBody.TrxID)
@@ -147,6 +123,7 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 
 	var totalOrder float64 = 0
 	transactItems := []types.TransactWriteItem{}
+	detallesList := []OrderDetailItem{}
 
 	for idx, itemReq := range reqBody.Items {
 		prodID := strings.TrimPrefix(strings.TrimSpace(itemReq.ProductID), "PROD#")
@@ -193,11 +170,12 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 			PrecioUnitario: itemReq.PrecioUnitario,
 			Subtotal:       subtotal,
 		}
+		detallesList = append(detallesList, detailItem)
 
 		detailAv, err := attributevalue.MarshalMap(detailItem)
 		if err != nil {
 			log.Printf("Error al serializar detalle %s: %v", detailSK, err)
-			return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al procesar el detalle de la orden"})
+			return nil, fmt.Errorf("error al procesar el detalle de la orden: %w", err)
 		}
 
 		transactItems = append(transactItems, types.TransactWriteItem{
@@ -253,7 +231,7 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 	headerAv, err := attributevalue.MarshalMap(headerItem)
 	if err != nil {
 		log.Printf("Error al serializar cabecera de la transacción: %v", err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al preparar la cabecera de la transacción"})
+		return nil, fmt.Errorf("error al preparar la cabecera de la transacción: %w", err)
 	}
 
 	transactItems = append([]types.TransactWriteItem{
@@ -270,13 +248,70 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 	})
 	if err != nil {
 		log.Printf("Error al ejecutar TransactWriteItems para la orden %s: %v", trxID, err)
-		return jsonResponse(http.StatusInternalServerError, map[string]string{"error": "Error al registrar la transacción atómica en DynamoDB"})
+		return nil, fmt.Errorf("error al registrar la transacción atómica en DynamoDB: %w", err)
 	}
 
-	return jsonResponse(http.StatusCreated, map[string]interface{}{
-		"header": headerItem,
-		"items":  reqBody.Items,
-	})
+	return &OrderFullResponse{
+		Header:   headerItem,
+		Detalles: detallesList,
+	}, nil
+}
+
+func handler(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
+	log.Printf("Petición recibida en CreateOrder: %s", string(rawEvent))
+
+	var apiReq events.APIGatewayProxyRequest
+	if err := json.Unmarshal(rawEvent, &apiReq); err == nil && apiReq.HTTPMethod != "" {
+		if apiReq.HTTPMethod == http.MethodOptions {
+			return events.APIGatewayProxyResponse{
+				StatusCode: http.StatusOK,
+				Headers: map[string]string{
+					"Access-Control-Allow-Origin":  "*",
+					"Access-Control-Allow-Methods": "POST,OPTIONS",
+					"Access-Control-Allow-Headers": "Content-Type",
+				},
+				Body: `{"status": "ok"}`,
+			}, nil
+		}
+		var reqBody CreateOrderRequest
+		if err := json.Unmarshal([]byte(apiReq.Body), &reqBody); err != nil {
+			return events.APIGatewayProxyResponse{
+				StatusCode: http.StatusBadRequest,
+				Headers:    map[string]string{"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+				Body:       `{"error": "Formato JSON de entrada inválido"}`,
+			}, nil
+		}
+		result, err := processOrder(ctx, reqBody)
+		if err != nil {
+			return events.APIGatewayProxyResponse{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+				Body:       fmt.Sprintf(`{"error": "%s"}`, err.Error()),
+			}, nil
+		}
+		jsonRes, _ := json.Marshal(result)
+		return events.APIGatewayProxyResponse{
+			StatusCode: http.StatusCreated,
+			Headers:    map[string]string{"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
+			Body:       string(jsonRes),
+		}, nil
+	}
+
+	var appSyncEvt AppSyncEvent
+	var reqBody CreateOrderRequest
+	if err := json.Unmarshal(rawEvent, &appSyncEvt); err == nil && (appSyncEvt.Input != nil || appSyncEvt.Arguments.Input != nil) {
+		if appSyncEvt.Input != nil {
+			reqBody = *appSyncEvt.Input
+		} else {
+			reqBody = *appSyncEvt.Arguments.Input
+		}
+	} else {
+		if err := json.Unmarshal(rawEvent, &reqBody); err != nil {
+			return nil, fmt.Errorf("payload de entrada inválido: %w", err)
+		}
+	}
+
+	return processOrder(ctx, reqBody)
 }
 
 func main() {
