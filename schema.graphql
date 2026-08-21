@@ -3,10 +3,6 @@ schema {
   mutation: Mutation
 }
 
-# =========================================================================
-# TIPOS PRINCIPALES
-# =========================================================================
-
 type CatalogItem {
   category: String!
   itemId: String!
@@ -82,9 +78,7 @@ type SerialTraceResult {
   records: [ProductSerial]!
 }
 
-# =========================================================================
-# INPUTS
-# =========================================================================
+
 
 input CreateCatalogInput {
   category: String!

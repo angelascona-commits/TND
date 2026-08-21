@@ -80,7 +80,6 @@ Resources:
                   - dynamodb:DeleteItem
                   - dynamodb:UpdateItem
                   - dynamodb:Query
-                  - dynamodb:Scan
                   - dynamodb:BatchGetItem
                   - dynamodb:BatchWriteItem
                 Resource:
@@ -883,7 +882,7 @@ Resources:
       ResponseMappingTemplate: "true"
 
   # =========================================================================
-  # MUTATION TRANSACCIONAL (LAMBDA EN GO)
+  # MUTATION TRANSACCIONAL 
   # =========================================================================
 
   CreateOrderResolver:

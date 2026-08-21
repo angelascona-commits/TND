@@ -6,6 +6,21 @@ body {
   font-size: 14px;
 }
 
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #0f172a;
+  color: #fff;
+  padding: 12px 24px;
+  border-bottom: 1px solid #334155;
+}
+.app-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
 .tab-nav {
   display: flex;
   background: #1e293b;
@@ -150,7 +165,7 @@ body {
   background: #fff;
   border-radius: 8px;
   padding: 24px;
-  width: 440px;
+  width: 460px;
   max-width: 95vw;
   max-height: 90vh;
   overflow-y: auto;

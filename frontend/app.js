@@ -1,5 +1,17 @@
-const GRAPHQL_URL = 'https://5lbbwct8lj.appsync-api.us-east-1.amazonaws.com/graphql';
-const GRAPHQL_API_KEY = 'da2-xxxxxxxxxxxxxxxxxxxxxxxxxx';
+let GRAPHQL_URL = localStorage.getItem('APPSYNC_GRAPHQL_URL');
+let GRAPHQL_API_KEY = localStorage.getItem('APPSYNC_GRAPHQL_KEY');
+
+const DEFAULT_URL = 'https://uea35pgezrfm7jwk3ewlddz5d4.appsync-api.us-east-1.amazonaws.com/graphql';
+const DEFAULT_KEY = 'da2-asaepk7shba2lkqm7zcr26yg3q';
+
+if (!GRAPHQL_URL || GRAPHQL_URL.includes('5lbbwct8lj')) {
+  GRAPHQL_URL = DEFAULT_URL;
+  localStorage.setItem('APPSYNC_GRAPHQL_URL', DEFAULT_URL);
+}
+if (!GRAPHQL_API_KEY || GRAPHQL_API_KEY.includes('xxx')) {
+  GRAPHQL_API_KEY = DEFAULT_KEY;
+  localStorage.setItem('APPSYNC_GRAPHQL_KEY', DEFAULT_KEY);
+}
 
 let catalogCache = { CATEGORIAS: [], MARCAS: [], ZONAS: [] };
 let catalogsLoaded = false;
@@ -947,6 +959,29 @@ async function searchOrderBySN() {
     showToast(e.message, true);
   }
 }
+
+document.getElementById('btn-open-config').addEventListener('click', () => {
+  document.getElementById('cfg-url').value = GRAPHQL_URL;
+  document.getElementById('cfg-key').value = GRAPHQL_API_KEY;
+  openModal('modal-config');
+});
+
+document.getElementById('form-config').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const url = document.getElementById('cfg-url').value.trim();
+  const key = document.getElementById('cfg-key').value.trim();
+  if (!url || !key) return showToast('Ingrese la URL y API Key de AppSync', true);
+
+  GRAPHQL_URL = url;
+  GRAPHQL_API_KEY = key;
+  localStorage.setItem('APPSYNC_GRAPHQL_URL', url);
+  localStorage.setItem('APPSYNC_GRAPHQL_KEY', key);
+
+  closeModal('modal-config');
+  showToast('Configuracion de AppSync guardada exitosamente');
+  catalogsLoaded = false;
+  loadCatalogs();
+});
 
 document.addEventListener('DOMContentLoaded', () => {
   loadCatalogs();

@@ -3,10 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sistema de Inventario - Panel de Control</title>
+  <title>Sistema de Inventario - AWS AppSync GraphQL</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+
+  <!-- HEADER SUPERIOR CON CONFIGURACION -->
+  <header class="app-header">
+    <div class="logo-title">
+      <h1>Sistema de Inventario (GraphQL AppSync)</h1>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-secondary btn-sm" id="btn-open-config">Configurar Endpoint</button>
+    </div>
+  </header>
 
   <!-- NAVEGACION POR PESTAÑAS -->
   <nav class="tab-nav">
@@ -18,10 +28,6 @@
 
   <!-- ================================================================== -->
   <!-- TAB 1: CATALOGOS                                                    -->
-  <!-- GET  /catalogs?categories=...                                       -->
-  <!-- POST /catalogs  {category, itemId, label, sortOrder, isActive}      -->
-  <!-- PATCH /catalogs {category, itemId, label, sortOrder, isActive}      -->
-  <!-- DELETE /catalogs {category, itemId}                                 -->
   <!-- ================================================================== -->
   <section id="tab-catalogs" class="tab-content active">
     <h2>Catalogos</h2>
@@ -76,11 +82,6 @@
 
   <!-- ================================================================== -->
   <!-- TAB 2: CLIENTES Y PROVEEDORES                                      -->
-  <!-- GET    /entities?rol=...&zona=...                                   -->
-  <!-- GET    /entities/{id}                                               -->
-  <!-- POST   /entities {dniRuc, nombre, correo, direccion, telefono, zona, rol} -->
-  <!-- PATCH  /entities {dniRuc, nombre, correo, direccion, telefono, zona, rol} -->
-  <!-- DELETE /entities/{id}                                               -->
   <!-- ================================================================== -->
   <section id="tab-entities" class="tab-content hidden">
     <h2>Clientes y Proveedores</h2>
@@ -149,15 +150,6 @@
 
   <!-- ================================================================== -->
   <!-- TAB 3: PRODUCTOS                                                    -->
-  <!-- GET    /products?cat=...&brand=...                                  -->
-  <!-- GET    /products/{id}       (detalle base + variantes + seriales)    -->
-  <!-- GET    /products/{id}/skus                                          -->
-  <!-- GET    /products/{id}/serials                                       -->
-  <!-- POST   /products {nombre, descripcion, categoryId, brandId, estado} -->
-  <!-- PATCH  /products {productId, nombre, ...}                           -->
-  <!-- DELETE /products/{id}                                               -->
-  <!-- POST   /products/{id}/skus  {variantId, ...}                        -->
-  <!-- POST   /products/{id}/serials {numeroSerie, estadoFisico, ...}      -->
   <!-- ================================================================== -->
   <section id="tab-products" class="tab-content hidden">
     <h2>Productos</h2>
@@ -250,7 +242,7 @@
           <label>Precio (S/): <input type="number" id="fsku-precio" step="0.01" placeholder="0.00" required></label>
           <label>Stock Inicial: <input type="number" id="fsku-stockTotal" value="0" min="0"></label>
           <div class="modal-actions">
-            <button type="submit" class="btn btn-success">Guardar SKU</button>
+            <button type="submit" class="btn">Guardar SKU</button>
             <button type="button" class="btn btn-secondary" onclick="closeModal('modal-sku')">Cancelar</button>
           </div>
         </form>
@@ -260,45 +252,37 @@
 
   <!-- ================================================================== -->
   <!-- TAB 4: TRANSACCIONES (COMPRAS Y VENTAS)                             -->
-  <!-- GET  /orders?user=...                                               -->
-  <!-- GET  /orders/{id}                                                   -->
-  <!-- GET  /orders/search?sn=...                                          -->
-  <!-- POST /orders {userDniRuc, tipoOperacion, estadoPago, items:[...]}   -->
   <!-- ================================================================== -->
   <section id="tab-orders" class="tab-content hidden">
-    <h2>Transacciones</h2>
+    <h2>Transacciones (Compras y Ventas)</h2>
 
     <div class="filter-row">
+      <label>Usuario (DNI/RUC):
+        <input type="text" id="ord-user-input" placeholder="Ej: 72345678">
+      </label>
       <label>Tipo:
         <select id="ord-filter-type">
-          <option value="">Todas</option>
-          <option value="Venta">Ventas</option>
-          <option value="Compra">Compras</option>
+          <option value="">-- Todos --</option>
+          <option value="Venta">Venta</option>
+          <option value="Compra">Compra</option>
         </select>
       </label>
-      <label>Desde:
-        <input type="date" id="ord-from-date">
-      </label>
-      <label>Hasta:
-        <input type="date" id="ord-to-date">
-      </label>
-      <label>Documento (DNI/RUC):
-        <input type="text" id="ord-user-input" placeholder="Opcional">
-      </label>
-      <button class="btn" id="btn-search-orders">Filtrar Transacciones</button>
+      <label>Desde: <input type="date" id="ord-from-date"></label>
+      <label>Hasta: <input type="date" id="ord-to-date"></label>
+      <button class="btn" id="btn-search-orders">Buscar</button>
       <button class="btn btn-success" id="btn-show-create-order">Nueva Transaccion</button>
     </div>
 
     <div class="filter-row">
-      <label>Buscar por Numero de Serie:
-        <input type="text" id="ord-sn-input" placeholder="Ej: SN-SAM-001">
+      <label>Rastrear Serie (Garantia):
+        <input type="text" id="ord-sn-input" placeholder="Ej: SN-S24U-001">
       </label>
       <button class="btn" id="btn-search-order-sn">Rastrear</button>
     </div>
 
     <table class="data-table">
       <thead>
-        <tr><th>ID Transaccion</th><th>Tipo</th><th>Cliente/Proveedor</th><th>Total</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr>
+        <tr><th>ID Transaccion</th><th>Tipo</th><th>Cliente / Proveedor</th><th>Total</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr>
       </thead>
       <tbody id="orders-tbody"></tbody>
     </table>
@@ -307,68 +291,52 @@
     <div id="order-detail-panel" class="detail-panel hidden">
       <h3>Detalle de la Transaccion: <span id="od-title"></span></h3>
       <div id="od-info"></div>
-      <h4>Items</h4>
+
+      <h4>Items de la Transaccion</h4>
       <table class="data-table">
         <thead><tr><th>Producto</th><th>SKU</th><th>Serie</th><th>Cantidad</th><th>Precio Unit.</th><th>Subtotal</th></tr></thead>
         <tbody id="od-items-tbody"></tbody>
       </table>
+
       <button class="btn btn-secondary" id="btn-close-order-detail">Cerrar Detalle</button>
     </div>
 
-    <!-- Panel resultados rastreo por serie -->
+    <!-- Panel rastreo de serie (Garantia) -->
     <div id="sn-trace-panel" class="detail-panel hidden">
-      <h3>Rastreo de Serie: <span id="sn-trace-title"></span></h3>
+      <h3>Rastreo de Garantia: <span id="sn-trace-title"></span></h3>
       <div id="sn-trace-results"></div>
-      <button class="btn btn-secondary" id="btn-close-sn-trace">Cerrar</button>
+      <button class="btn btn-secondary" id="btn-close-sn-trace" style="margin-top:12px;">Cerrar Rastreo</button>
     </div>
 
     <!-- Modal crear transaccion -->
     <div id="modal-order" class="modal hidden">
-      <div class="modal-box" style="width:600px;">
-        <h3>Nueva Transaccion</h3>
+      <div class="modal-box" style="width: 600px;">
+        <h3>Nueva Transaccion (Compra / Venta)</h3>
         <form id="form-order">
-          <div style="display:flex; gap:12px;">
-            <label style="flex:2;">Documento Cliente/Proveedor:
-              <input type="text" id="fo-userDniRuc" placeholder="DNI o RUC" required>
-            </label>
-            <label style="flex:1;">Tipo de Operacion:
-              <select id="fo-tipoOperacion" required>
-                <option value="Venta">Venta</option>
-                <option value="Compra">Compra</option>
-              </select>
-            </label>
+          <label>Documento Cliente / Proveedor: <input type="text" id="fo-userDniRuc" placeholder="Ej: 72345678" required></label>
+          <label>Tipo de Operacion:
+            <select id="fo-tipoOperacion" required>
+              <option value="Venta">Venta (Salida de Inventario)</option>
+              <option value="Compra">Compra (Ingreso de Inventario)</option>
+            </select>
+          </label>
+          <label>Estado de Pago:
+            <select id="fo-estadoPago">
+              <option value="COMPLETADO">Completado</option>
+              <option value="PENDIENTE">Pendiente</option>
+            </select>
+          </label>
+
+          <div style="margin-top:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <strong>Items de la Transaccion:</strong>
+              <button type="button" class="btn btn-sm btn-secondary" id="btn-add-order-item">+ Agregar Item</button>
+            </div>
+            <div id="fo-items-container"></div>
           </div>
-
-          <div style="display:flex; gap:12px; margin-top:8px;">
-            <label style="flex:1;">Estado de Pago:
-              <select id="fo-estadoPago">
-                <option value="COMPLETADO">Completado</option>
-                <option value="PENDIENTE">Pendiente</option>
-                <option value="ANULADO">Anulado</option>
-              </select>
-            </label>
-          </div>
-
-          <hr style="margin:16px 0 12px; border-color:#e2e8f0;">
-          <h4 style="margin-bottom:8px;">Items</h4>
-
-          <div id="fo-items-container">
-            <!-- Filas dinámicas de items -->
-          </div>
-
-          <datalist id="sku-datalist">
-            <option value="S24-NEGRO-256GB">Samsung Galaxy S24 Negro 256GB (S/ 4599)</option>
-            <option value="S24-GRIS-512GB">Samsung Galaxy S24 Gris 512GB (S/ 5299)</option>
-            <option value="MBP16-GRAY-512GB">MacBook Pro 16 M3 Space Gray (S/ 12999)</option>
-            <option value="MBP16-SILVER-1TB">MacBook Pro 16 M3 Silver 1TB (S/ 15999)</option>
-            <option value="MON-DELL-27-4K">Monitor Dell 27 4K (S/ 1650)</option>
-            <option value="KEY-LOGI-MX">Teclado Logitech MX Keys (S/ 320)</option>
-          </datalist>
-
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-add-order-item" style="margin-top:6px; margin-bottom:14px;">+ Agregar Item</button>
 
           <div class="modal-actions">
-            <button type="submit" class="btn btn-success" style="flex:1;">Registrar Transaccion</button>
+            <button type="submit" class="btn">Registrar Transaccion</button>
             <button type="button" class="btn btn-secondary" onclick="closeModal('modal-order')">Cancelar</button>
           </div>
         </form>
@@ -376,7 +344,34 @@
     </div>
   </section>
 
-  <!-- Toast de notificaciones -->
+  <!-- Modal de configuracion del endpoint AppSync -->
+  <div id="modal-config" class="modal hidden">
+    <div class="modal-box">
+      <h3>Configurar Endpoint AWS AppSync</h3>
+      <form id="form-config">
+        <label>GraphQL Endpoint URL:
+          <input type="text" id="cfg-url" placeholder="https://xxxx.appsync-api.us-east-1.amazonaws.com/graphql" required>
+        </label>
+        <label>GraphQL API Key:
+          <input type="text" id="cfg-key" placeholder="da2-xxxxxxxxxxxxxxxxxxxxxxxxxx" required>
+        </label>
+        <div class="modal-actions">
+          <button type="submit" class="btn">Guardar y Reconectar</button>
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-config')">Cerrar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <datalist id="sku-datalist">
+    <option value="S24-NEGRO-256GB">Samsung Galaxy S24 Negro (S/ 4,599)</option>
+    <option value="S24-GRIS-512GB">Samsung Galaxy S24 Gris (S/ 5,299)</option>
+    <option value="MBP16-GRAY-512GB">MacBook Pro 16 Space Gray (S/ 12,999)</option>
+    <option value="MBP16-SILVER-1TB">MacBook Pro 16 Silver (S/ 15,999)</option>
+    <option value="MON-DELL-27-4K">Monitor Dell 27 4K (S/ 1,650)</option>
+    <option value="KEY-LOGI-MX">Teclado Logitech MX Keys (S/ 320)</option>
+  </datalist>
+
   <div id="toast" class="toast hidden"></div>
 
   <script src="app.js"></script>
