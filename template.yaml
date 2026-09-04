@@ -882,7 +882,7 @@ Resources:
       ResponseMappingTemplate: "true"
 
   # =========================================================================
-  # MUTATION TRANSACCIONAL 
+  # MUTATION TRANSACCIONAL S
   # =========================================================================
 
   CreateOrderResolver:

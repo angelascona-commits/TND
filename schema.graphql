@@ -78,8 +78,6 @@ type SerialTraceResult {
   records: [ProductSerial]!
 }
 
-
-
 input CreateCatalogInput {
   category: String!
   itemId: String
